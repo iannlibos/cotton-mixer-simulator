@@ -777,7 +777,7 @@ function buildPDF(name, date, params, lots, th) {
   doc.rect(0, 0, w, 28, "F");
   doc.setTextColor(34, 211, 238);
   doc.setFontSize(9);
-  doc.text("NORTEX · GERADOR DE MISTURAS", 14, 12);
+  doc.text("SANTANA TEXTILES · GERADOR DE MISTURAS", 14, 12);
   doc.setTextColor(232, 234, 240);
   doc.setFontSize(16);
   doc.setFont(undefined, "bold");

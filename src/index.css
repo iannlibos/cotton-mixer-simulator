@@ -152,11 +152,12 @@ select {
 }
 
 .sb-tag {
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: 2px;
+  letter-spacing: 1.2px;
   color: var(--cy);
   text-transform: uppercase;
+  line-height: 1.25;
 }
 
 .sb-name {

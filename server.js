@@ -82,7 +82,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log("");
-  console.log("  Nortex · Gerador de Misturas (produção)");
+  console.log("  Santana Textiles · Gerador de Misturas (produção)");
   console.log("  ----------------------------------------");
   console.log("  " + path.join(DIST, "index.html"));
   console.log("  http://localhost:" + PORT);

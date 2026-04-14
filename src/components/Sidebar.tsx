@@ -48,7 +48,7 @@ export function Sidebar({ collapsed, onToggleSidebar }: SidebarProps) {
         <div className="sb-brand">
           <div className="sb-logo">
             <div className="sb-dot" />
-            <span className="sb-tag">Nortex</span>
+            <span className="sb-tag">Santana Textiles</span>
           </div>
           <div className="sb-name">Gerador de Misturas</div>
         </div>

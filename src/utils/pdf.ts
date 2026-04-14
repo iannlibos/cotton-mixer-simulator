@@ -33,7 +33,7 @@ export function buildPDF(
   doc.rect(0, 0, w, 28, "F");
   doc.setTextColor(34, 211, 238);
   doc.setFontSize(9);
-  doc.text("NORTEX · GERADOR DE MISTURAS", 14, 12);
+  doc.text("SANTANA TEXTILES · GERADOR DE MISTURAS", 14, 12);
   doc.setTextColor(232, 234, 240);
   doc.setFontSize(16);
   doc.setFont(undefined as never, "bold");
@@ -224,7 +224,7 @@ function drawSeqFooter(
   const ts = new Date().toLocaleString("pt-BR");
   const base =
     (shortHint ? shortHint + " · " : "") +
-    "Nortex · " +
+    "Santana Textiles · " +
     ts +
     " · " +
     pageNum +
@@ -240,7 +240,7 @@ function drawSummaryStrip(doc: jsPDF, pageW: number, m: number, subtitle: string
   doc.setTextColor(34, 211, 238);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
-  doc.text("NORTEX · PLANEJADOR DE SEQUÊNCIAS", m, 10);
+  doc.text("SANTANA TEXTILES · PLANEJADOR DE SEQUÊNCIAS", m, 10);
   doc.setTextColor(232, 234, 240);
   doc.setFontSize(14);
   doc.text(subtitle, m, 19);
@@ -398,7 +398,7 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     doc.setTextColor(34, 211, 238);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(7);
-    doc.text("NORTEX · PLANEJADOR DE SEQUÊNCIAS", m, 8);
+    doc.text("SANTANA TEXTILES · PLANEJADOR DE SEQUÊNCIAS", m, 8);
     doc.setTextColor(200, 205, 220);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
