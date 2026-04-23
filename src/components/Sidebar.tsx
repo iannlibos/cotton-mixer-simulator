@@ -10,7 +10,7 @@ export function Sidebar({ collapsed, onToggleSidebar }: SidebarProps) {
   const {
     curStep,
     curPage,
-    stock,
+    stockForMixture,
     currentMix,
     history,
     setCurStep,
@@ -25,7 +25,7 @@ export function Sidebar({ collapsed, onToggleSidebar }: SidebarProps) {
 
   const isStepDone = (n: number) => curStep > n;
   const isStepUnlocked = (n: number) =>
-    n < curStep || (n === 2 && stock.length > 0) || (n === 3 && currentMix.length > 0);
+    n < curStep || (n === 2 && stockForMixture.length > 0) || (n === 3 && currentMix.length > 0);
 
   const steps = [
     { n: 1, label: "Carregar Estoque" },

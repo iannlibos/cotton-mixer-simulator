@@ -5,6 +5,7 @@ import {
   DEFAULT_RULES,
   PARAMS,
   ensureThresholds,
+  roundParamLimit,
 } from "@/domain/types";
 import {
   calcMixParams,
@@ -12,15 +13,25 @@ import {
   baleWeight,
 } from "@/engine/constraints";
 import { explainRelaxationSuggestion, optimizeMix, type OptimizerResult } from "@/engine/optimizer";
-import { runAllStrategies, type StrategyResult } from "@/engine/strategies";
-import { solverRouter } from "@/engine/solvers/router";
+import type { StrategyResult } from "@/engine/strategies";
+import { monteCarloOptimize } from "@/engine/solvers/montecarlo";
+import { saOptimize } from "@/engine/solvers/annealing";
 import { yieldToUi } from "@/engine/yield-ui";
-import type { SolverMode, SolverOptions, SolverResult } from "@/engine/solvers/types";
+import type { SolverOptions, SolverResult } from "@/engine/solvers/types";
 import { parseCSVFile } from "@/io/csv";
 import { buildAuditRecord } from "@/audit/trail";
-import { computeQualityBaseline, filterUsableLots } from "@/engine/baseline";
+import {
+  computeQualityBaseline,
+  filterUsableLots,
+  isLotUsableForOptimization,
+} from "@/engine/baseline";
 
 const OPTIMIZER_VERSION = "2.0.0";
+
+function stockForMix(stock: Lot[], excludedFromMixIds: number[]): Lot[] {
+  const ex = new Set(excludedFromMixIds);
+  return stock.filter((l) => isLotUsableForOptimization(l) && !ex.has(l.id));
+}
 
 function loadFromStorage<T>(key: string, fallback: T): T {
   try {
@@ -75,6 +86,10 @@ function migrateHistoryUhml(history: HistoryRecord[]): HistoryRecord[] {
 
 interface AppState {
   stock: Lot[];
+  /** Lotes desmarcados na etapa 1 não entram na geração da mistura. */
+  excludedFromMixIds: number[];
+  /** Pontos de corte opcionais por parâmetro HVI para o overview (vazio = padrão). */
+  qualityBinBreakpoints: Record<string, number[] | undefined>;
   currentMix: Lot[];
   history: HistoryRecord[];
   curStep: number;
@@ -90,9 +105,9 @@ interface AppState {
   histDetailIndex: number | null;
   suggestions: StrategyResult[];
   seqHistRecord: HistoryRecord | null;
-  solverMode: SolverMode;
   solverOptions: SolverOptions;
   lastSolverResult: SolverResult | null;
+  solverResultsByStrategy: Record<string, SolverResult | null>;
   isGenerating: boolean;
   generationStatus: string;
   generationProgress: number;
@@ -100,6 +115,8 @@ interface AppState {
 
 const initialState: AppState = {
   stock: [],
+  excludedFromMixIds: [],
+  qualityBinBreakpoints: {},
   currentMix: [],
   history: migrateHistoryUhml(loadFromStorage<HistoryRecord[]>("ntx_hist", [])),
   curStep: 1,
@@ -115,15 +132,15 @@ const initialState: AppState = {
   histDetailIndex: null,
   suggestions: [],
   seqHistRecord: null,
-  solverMode: loadFromStorage<SolverMode>("ntx_solver_mode", "classic"),
-  solverOptions: loadFromStorage<SolverOptions>("ntx_solver_opts", {
+  solverOptions: {
     mcIterations: 20,
     saIterations: 3000,
     saT0: 500,
     saTmin: 0.1,
     saAlpha: 0.997,
-  }),
+  },
   lastSolverResult: null,
+  solverResultsByStrategy: {},
   isGenerating: false,
   generationStatus: "",
   generationProgress: 0,
@@ -144,6 +161,15 @@ interface AppContextValue extends AppState {
   updateRule: (updates: Partial<EngineRules>) => void;
   loadStockFromFile: (file: File) => Promise<void>;
   resetStock: () => void;
+  stockForMixture: Lot[];
+  toggleLotExcludedFromMix: (lotId: number) => void;
+  setLotsIncludedInMixture: (lotIds: number[], included: boolean) => void;
+  includeAllLotsInMixture: () => void;
+  excludeAllLotsInMixture: () => void;
+  /** Inclui ou exclui todos os lotes elegíveis do produtor na mistura. */
+  toggleProducerMixSelection: (producerName: string) => void;
+  setQualityBinBreakpoints: (paramKey: string, breakpoints: number[]) => void;
+  resetQualityBinBreakpoints: (paramKey: string) => void;
   runEngine: (targetWeight: number) => Promise<void>;
   runStrategies: (targetWeight: number) => Promise<void>;
   selectSuggestion: (idx: number) => void;
@@ -164,8 +190,6 @@ interface AppContextValue extends AppState {
   getExplainRelaxation: () => string | null;
   hasCostData: () => boolean;
   applyQualityBaseline: () => void;
-  setSolverMode: (m: SolverMode) => void;
-  setSolverOptions: (o: Partial<SolverOptions>) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -191,7 +215,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setStock = useCallback(
-    (lots: Lot[]) => persist({ stock: lots }),
+    (lots: Lot[]) =>
+      persist({
+        stock: lots,
+        excludedFromMixIds: [],
+        qualityBinBreakpoints: {},
+      }),
     [persist]
   );
 
@@ -204,6 +233,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (n: number) =>
       setState((s) => {
         if (n === 2 && !s.stock.length) return s;
+        if (n === 2 && !stockForMix(s.stock, s.excludedFromMixIds).length) return s;
         if (n === 3 && !s.currentMix.length) return s;
         const page = n === 1 ? "step1" : n === 2 ? "step2" : "step3";
         return { ...s, curStep: n, curPage: page };
@@ -239,10 +269,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const updateThreshold = useCallback(
     (key: string, side: "min" | "max", val: number) => {
+      if (!Number.isFinite(val)) return;
+      const p = PARAMS.find((x) => x.key === key);
+      const rounded = p ? roundParamLimit(val, p.prec) : val;
       setState((s) => {
         const th = { ...s.thresholds };
         if (!th[key]) th[key] = { min: 0, max: 1 };
-        th[key] = { ...th[key], [side]: val };
+        th[key] = { ...th[key], [side]: rounded };
         saveToStorage("ntx_thresh", th);
         return { ...s, thresholds: ensureThresholds(th) };
       });
@@ -271,6 +304,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setState((s) => ({
           ...s,
           stock: lots,
+          excludedFromMixIds: [],
+          qualityBinBreakpoints: {},
           lastCsvWarnings: warnings,
           suggestions: [],
         }));
@@ -285,6 +320,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({
       ...s,
       stock: [],
+      excludedFromMixIds: [],
+      qualityBinBreakpoints: {},
       currentMix: [],
       lastOptimization: null,
       targets: {},
@@ -294,13 +331,89 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  const toggleLotExcludedFromMix = useCallback((lotId: number) => {
+    setState((s) => {
+      const lot = s.stock.find((l) => l.id === lotId);
+      if (!lot || !isLotUsableForOptimization(lot)) return s;
+      const has = s.excludedFromMixIds.includes(lotId);
+      return {
+        ...s,
+        excludedFromMixIds: has
+          ? s.excludedFromMixIds.filter((id) => id !== lotId)
+          : [...s.excludedFromMixIds, lotId],
+      };
+    });
+  }, []);
+
+  const setLotsIncludedInMixture = useCallback((lotIds: number[], included: boolean) => {
+    setState((s) => {
+      const nextEx = new Set(s.excludedFromMixIds);
+      for (const id of lotIds) {
+        const lot = s.stock.find((l) => l.id === id);
+        if (!lot || !isLotUsableForOptimization(lot)) continue;
+        if (included) nextEx.delete(id);
+        else nextEx.add(id);
+      }
+      return { ...s, excludedFromMixIds: [...nextEx] };
+    });
+  }, []);
+
+  const includeAllLotsInMixture = useCallback(() => {
+    setState((s) => ({ ...s, excludedFromMixIds: [] }));
+  }, []);
+
+  const excludeAllLotsInMixture = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      excludedFromMixIds: s.stock.filter((l) => isLotUsableForOptimization(l)).map((l) => l.id),
+    }));
+  }, []);
+
+  const toggleProducerMixSelection = useCallback((producerName: string) => {
+    setState((s) => {
+      const lotIds = s.stock
+        .filter((l) => l.produtor === producerName && isLotUsableForOptimization(l))
+        .map((l) => l.id);
+      if (!lotIds.length) return s;
+      const allExcluded = lotIds.every((id) => s.excludedFromMixIds.includes(id));
+      const next = new Set(s.excludedFromMixIds);
+      if (allExcluded) {
+        for (const id of lotIds) next.delete(id);
+      } else {
+        for (const id of lotIds) next.add(id);
+      }
+      return { ...s, excludedFromMixIds: [...next] };
+    });
+  }, []);
+
+  const setQualityBinBreakpoints = useCallback((paramKey: string, breakpoints: number[]) => {
+    setState((s) => ({
+      ...s,
+      qualityBinBreakpoints: { ...s.qualityBinBreakpoints, [paramKey]: breakpoints },
+    }));
+  }, []);
+
+  const resetQualityBinBreakpoints = useCallback((paramKey: string) => {
+    setState((s) => {
+      const q = { ...s.qualityBinBreakpoints };
+      delete q[paramKey];
+      return { ...s, qualityBinBreakpoints: q };
+    });
+  }, []);
+
+  const stockForMixture = useMemo(
+    () => stockForMix(state.stock, state.excludedFromMixIds),
+    [state.stock, state.excludedFromMixIds]
+  );
+
   const setTargetWeight = useCallback((w: number) => setState((s) => ({ ...s, targetWeight: w })), []);
   const setMixName = useCallback((n: string) => setState((s) => ({ ...s, mixName: n })), []);
 
   const runStrategies = useCallback(async (targetWeight: number) => {
     const snap = stateRef.current;
-    if (!snap.stock.length) return;
-    if (!filterUsableLots(snap.stock).length) {
+    const mixStock = stockForMix(snap.stock, snap.excludedFromMixIds);
+    if (!mixStock.length) return;
+    if (!filterUsableLots(mixStock).length) {
       alert(
         "Nenhum lote tem todas as medidas HVI preenchidas (zeros = ainda não avaliado). Complete as análises ou ajuste o CSV.",
       );
@@ -310,131 +423,154 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({
       ...s,
       isGenerating: true,
-      generationStatus: "Gerando misturas…",
+      generationStatus: "Preparando engines…",
       generationProgress: 0,
     }));
     await yieldToUi();
 
-    const isClassic = snap.solverMode === "classic";
-
     try {
-      const results = await runAllStrategies(
-        snap.stock,
+      const solverInput = {
+        stock: mixStock,
         targetWeight,
-        snap.rules,
-        snap.thresholds,
-        snap.optimizationPriority,
-        (label, stepIndex, stepTotal) => {
+        thresholds: snap.thresholds,
+        rules: snap.rules,
+        priority: snap.optimizationPriority,
+        seed: Date.now(),
+      };
+
+      // 1) Engine Otimizada (clássica)
+      setState((s) => ({
+        ...s,
+        generationStatus: "Engine otimizada (5 modos + local search)…",
+        generationProgress: 5,
+      }));
+      await yieldToUi();
+      const classicT0 = performance.now();
+      const classicOpt = optimizeMix(solverInput);
+      const classicElapsed = Math.round(performance.now() - classicT0);
+
+      let classicSug: StrategyResult | null = null;
+      if (classicOpt.best?.mix?.length && classicOpt.best.params) {
+        classicSug = {
+          strategy: {
+            id: "engine_optimized",
+            name: "Engine Otimizada",
+            icon: "\u2699\ufe0f",
+            color: "#a855f7",
+            desc: "Otimizador principal: 5 modos greedy + localImprove (até 1500 passos).",
+            score: () => 0,
+          },
+          lots: classicOpt.best.mix.map((l) => ({ ...l })),
+          params: classicOpt.best.params,
+          violations: checkViolations(classicOpt.best.params, snap.thresholds),
+          elapsed: classicElapsed,
+        };
+      }
+      setState((s) => ({ ...s, generationProgress: 20 }));
+      await yieldToUi();
+
+      // 2) Monte Carlo
+      setState((s) => ({
+        ...s,
+        generationStatus: "Monte Carlo: explorando soluções…",
+        generationProgress: 25,
+      }));
+      await yieldToUi();
+      const mcT0 = performance.now();
+      const mcResult = await monteCarloOptimize(solverInput, {
+        ...snap.solverOptions,
+        onMcProgress: (label, cur, tot) => {
           setState((s) => ({
             ...s,
             generationStatus: label,
-            generationProgress: isClassic
-              ? Math.round(((stepIndex + 1) / stepTotal) * 35)
-              : Math.round(((stepIndex + 1) / stepTotal) * 28),
+            generationProgress: 25 + Math.round((cur / tot) * 35),
           }));
         },
-      );
+      });
+      const mcElapsed = Math.round(performance.now() - mcT0);
 
-      let fourth: StrategyResult | null = null;
-      let solverOut: SolverResult | null = null;
-
-      if (isClassic) {
-        setState((s) => ({
-          ...s,
-          generationStatus: "Engine otimizada (5 modos + local search)…",
-          generationProgress: 40,
-        }));
-        await yieldToUi();
-        const t0 = performance.now();
-        const optRes = optimizeMix({
-          stock: snap.stock,
-          targetWeight,
-          thresholds: snap.thresholds,
-          rules: snap.rules,
-          priority: snap.optimizationPriority,
-          seed: Date.now(),
-        });
-        const elapsed = Math.round(performance.now() - t0);
-        const best = optRes.best;
-        if (best?.mix?.length && best.params) {
-          fourth = {
-            strategy: {
-              id: "engine_optimized",
-              name: "Engine Otimizada",
-              icon: "\u2699\ufe0f",
-              color: "#a855f7",
-              desc: "Otimizador principal: 5 modos greedy + localImprove (até 1500 passos).",
-              score: () => 0,
-            },
-            lots: best.mix.map((l) => ({ ...l })),
-            params: best.params,
-            violations: checkViolations(best.params, snap.thresholds),
-            elapsed,
-          };
-        }
-        setState((s) => ({ ...s, generationProgress: 85 }));
-        await yieldToUi();
-      } else {
-        setState((s) => ({
-          ...s,
-          generationStatus:
-            snap.solverMode === "montecarlo"
-              ? "Monte Carlo: explorando soluções…"
-              : "Simulated Annealing…",
-          generationProgress: 35,
-        }));
-        await yieldToUi();
-
-        const opts: SolverOptions = {
-          ...snap.solverOptions,
-          onMcProgress: (label, cur, tot) => {
-            setState((s) => ({
-              ...s,
-              generationStatus: label,
-              generationProgress: 35 + Math.round((cur / tot) * 55),
-            }));
+      let mcSug: StrategyResult | null = null;
+      let mcSolverResult: SolverResult | null = null;
+      if (mcResult.best?.mix?.length && mcResult.best.params) {
+        mcSug = {
+          strategy: {
+            id: "solver_montecarlo",
+            name: "Monte Carlo",
+            icon: "\u{1f3b2}",
+            color: "#06b6d4",
+            desc: `Engine otimizada executada ${snap.solverOptions.mcIterations ?? 20}× com seeds aleatórios.`,
+            score: () => 0,
           },
+          lots: mcResult.best.mix.map((l) => ({ ...l })),
+          params: mcResult.best.params,
+          violations: checkViolations(mcResult.best.params, snap.thresholds),
+          elapsed: mcElapsed,
         };
-
-        solverOut = await solverRouter(
-          snap.solverMode,
-          {
-            stock: snap.stock,
-            targetWeight,
-            thresholds: snap.thresholds,
-            rules: snap.rules,
-            priority: snap.optimizationPriority,
-            seed: Date.now(),
-          },
-          opts,
-        );
-
-        const best = solverOut.result.best;
-        if (best?.mix?.length && best.params) {
-          const solverLabel = snap.solverMode === "montecarlo" ? "Monte Carlo" : "Simulated Annealing";
-          fourth = {
-            strategy: {
-              id: `solver_${snap.solverMode}`,
-              name: solverLabel,
-              icon: snap.solverMode === "montecarlo" ? "\u{1f3b2}" : "\u{1f525}",
-              color: snap.solverMode === "montecarlo" ? "#06b6d4" : "#f97316",
-              desc:
-                snap.solverMode === "montecarlo"
-                  ? `Engine otimizada executada ${snap.solverOptions.mcIterations ?? 20}× com seeds aleatórios.`
-                  : `Meta-heurística com ${snap.solverOptions.saIterations ?? 3000} iterações.`,
-              score: () => 0,
-            },
-            lots: best.mix.map((l) => ({ ...l })),
-            params: best.params,
-            violations: checkViolations(best.params, snap.thresholds),
-            elapsed: solverOut.elapsed,
-          };
+        const classicScore = classicOpt.best?.score ?? null;
+        const solverScore = mcResult.best.score;
+        let improvement: number | null = null;
+        if (classicScore != null && solverScore != null && classicScore !== 0) {
+          improvement = ((classicScore - solverScore) / Math.abs(classicScore)) * 100;
         }
+        mcSolverResult = {
+          result: mcResult,
+          solverMode: "montecarlo",
+          elapsed: mcElapsed,
+          classicScore,
+          solverScore,
+          improvement,
+        };
       }
 
-      const allSuggestions = fourth ? [...results, fourth] : results;
+      // 3) Simulated Annealing
+      setState((s) => ({
+        ...s,
+        generationStatus: "Simulated Annealing…",
+        generationProgress: 65,
+      }));
+      await yieldToUi();
+      const saT0 = performance.now();
+      const saResult = saOptimize(solverInput, snap.solverOptions);
+      const saElapsed = Math.round(performance.now() - saT0);
 
-      if (!allSuggestions.length) {
+      let saSug: StrategyResult | null = null;
+      let saSolverResult: SolverResult | null = null;
+      if (saResult.best?.mix?.length && saResult.best.params) {
+        saSug = {
+          strategy: {
+            id: "solver_sa",
+            name: "Simulated Annealing",
+            icon: "\u{1f525}",
+            color: "#f97316",
+            desc: `Meta-heurística com ${snap.solverOptions.saIterations ?? 3000} iterações.`,
+            score: () => 0,
+          },
+          lots: saResult.best.mix.map((l) => ({ ...l })),
+          params: saResult.best.params,
+          violations: checkViolations(saResult.best.params, snap.thresholds),
+          elapsed: saElapsed,
+        };
+        const classicScore = classicOpt.best?.score ?? null;
+        const solverScore = saResult.best.score;
+        let improvement: number | null = null;
+        if (classicScore != null && solverScore != null && classicScore !== 0) {
+          improvement = ((classicScore - solverScore) / Math.abs(classicScore)) * 100;
+        }
+        saSolverResult = {
+          result: saResult,
+          solverMode: "sa",
+          elapsed: saElapsed,
+          classicScore,
+          solverScore,
+          improvement,
+        };
+      }
+
+      const suggestions = [classicSug, mcSug, saSug].filter(
+        (x): x is StrategyResult => x != null,
+      );
+
+      if (!suggestions.length) {
         alert("Nenhuma estratégia conseguiu gerar mistura dentro dos limites e regras atuais. Revise os parâmetros.");
         setState((s) => ({
           ...s,
@@ -447,8 +583,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       setState((s) => ({
         ...s,
-        suggestions: allSuggestions,
-        lastSolverResult: solverOut,
+        suggestions,
+        solverResultsByStrategy: {
+          solver_montecarlo: mcSolverResult,
+          solver_sa: saSolverResult,
+        },
+        lastOptimization: classicOpt,
+        lastSolverResult: null,
         targetWeight,
         isGenerating: false,
         generationStatus: "",
@@ -472,10 +613,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const sug = s.suggestions[idx];
         if (!sug) return s;
         const isSolver = sug.strategy.id.startsWith("solver_");
+        const solverResult = isSolver
+          ? s.solverResultsByStrategy[sug.strategy.id] ?? null
+          : null;
         return {
           ...s,
           currentMix: sug.lots.map(l => ({ ...l })),
-          lastSolverResult: isSolver ? s.lastSolverResult : null,
+          lastSolverResult: solverResult,
           curStep: 3,
           curPage: "step3",
         };
@@ -486,27 +630,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const runEngine = useCallback(async (targetWeight: number) => {
     const s = stateRef.current;
-    if (!s.stock.length) return;
-    if (!filterUsableLots(s.stock).length) {
+    const mixStock = stockForMix(s.stock, s.excludedFromMixIds);
+    if (!mixStock.length) return;
+    if (!filterUsableLots(mixStock).length) {
       alert(
         "Nenhum lote tem todas as medidas HVI preenchidas (zeros = ainda não avaliado). A engine só usa lotes com dados completos.",
       );
       return;
     }
     try {
-      const solverOut = await solverRouter(
-        s.solverMode,
-        {
-          stock: s.stock,
-          targetWeight,
-          thresholds: s.thresholds,
-          rules: s.rules,
-          priority: s.optimizationPriority,
-          seed: Date.now(),
-        },
-        s.solverOptions,
-      );
-      const result = solverOut.result;
+      const result = optimizeMix({
+        stock: mixStock,
+        targetWeight,
+        thresholds: s.thresholds,
+        rules: s.rules,
+        priority: s.optimizationPriority,
+        seed: Date.now(),
+      });
       const best = result.best;
       if (!best || !best.mix.length) {
         alert("Não foi possível gerar mistura. Revise regras e estoque.");
@@ -516,7 +656,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         currentMix: best.mix.map((l) => ({ ...l })),
         lastOptimization: result,
-        lastSolverResult: solverOut,
+        lastSolverResult: null,
         targetWeight,
         curStep: 3,
         curPage: "step3",
@@ -529,6 +669,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const runWithTargets = useCallback(async (targetWeight: number) => {
     const s = stateRef.current;
+    const mixStock = stockForMix(s.stock, s.excludedFromMixIds);
     const activeTargets: Record<string, number> = {};
     PARAMS.forEach((p) => {
       const v = s.targets[p.key];
@@ -538,27 +679,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       alert("Preencha ao menos um target nos KPIs.");
       return;
     }
-    if (!filterUsableLots(s.stock).length) {
+    if (!filterUsableLots(mixStock).length) {
       alert(
         "Nenhum lote tem todas as medidas HVI preenchidas. A otimização com targets exige lotes com dados completos.",
       );
       return;
     }
     try {
-      const solverOut = await solverRouter(
-        s.solverMode,
-        {
-          stock: s.stock,
-          targetWeight,
-          thresholds: s.thresholds,
-          rules: s.rules,
-          priority: s.optimizationPriority,
-          seed: Date.now(),
-          targetValues: activeTargets,
-        },
-        s.solverOptions,
-      );
-      const result = solverOut.result;
+      const result = optimizeMix({
+        stock: mixStock,
+        targetWeight,
+        thresholds: s.thresholds,
+        rules: s.rules,
+        priority: s.optimizationPriority,
+        seed: Date.now(),
+        targetValues: activeTargets,
+      });
       const best = result.best;
       if (!best || !best.mix.length) {
         alert("Não foi possível atingir targets com as regras atuais.");
@@ -568,7 +704,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         currentMix: best.mix.map((l) => ({ ...l })),
         lastOptimization: result,
-        lastSolverResult: solverOut,
+        lastSolverResult: null,
         targetWeight,
         curStep: 3,
         curPage: "step3",
@@ -590,8 +726,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const addLotToMix = useCallback((stockId: number) => {
     setState((s) => {
+      if (s.excludedFromMixIds.includes(stockId)) return s;
       const lot = s.stock.find((l) => l.id === stockId);
-      if (!lot) return s;
+      if (!lot || !isLotUsableForOptimization(lot)) return s;
       const entry = { ...lot, allocBales: 1, allocWeight: baleWeight(lot) };
       return { ...s, currentMix: [...s.currentMix, entry] };
     });
@@ -745,7 +882,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const applyQualityBaseline = useCallback(() => {
     setState((s) => {
-      const b = computeQualityBaseline(s.stock);
+      const mixStock = stockForMix(s.stock, s.excludedFromMixIds);
+      const b = computeQualityBaseline(mixStock);
       if (!b) {
         alert(
           "Não há lotes com HVI completo no estoque para calcular o baseline. Importe um CSV com medidas preenchidas ou aguarde as análises.",
@@ -758,22 +896,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const setSolverMode = useCallback((m: SolverMode) => {
-    saveToStorage("ntx_solver_mode", m);
-    setState((s) => ({ ...s, solverMode: m, lastSolverResult: null }));
-  }, []);
-
-  const setSolverOptions = useCallback((o: Partial<SolverOptions>) => {
-    setState((s) => {
-      const solverOptions = { ...s.solverOptions, ...o };
-      saveToStorage("ntx_solver_opts", solverOptions);
-      return { ...s, solverOptions };
-    });
-  }, []);
-
   const value = useMemo(
     (): AppContextValue => ({
       ...state,
+      stockForMixture,
       setStock,
       setCurrentMix,
       setCurStep,
@@ -788,6 +914,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateRule,
       loadStockFromFile,
       resetStock,
+      toggleLotExcludedFromMix,
+      setLotsIncludedInMixture,
+      includeAllLotsInMixture,
+      excludeAllLotsInMixture,
+      toggleProducerMixSelection,
+      setQualityBinBreakpoints,
+      resetQualityBinBreakpoints,
       runEngine,
       runStrategies,
       selectSuggestion,
@@ -808,11 +941,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       getExplainRelaxation,
       hasCostData: hasCostDataFn,
       applyQualityBaseline,
-      setSolverMode,
-      setSolverOptions,
     }),
     [
       state,
+      stockForMixture,
       setStock,
       setCurrentMix,
       setCurStep,
@@ -827,6 +959,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateRule,
       loadStockFromFile,
       resetStock,
+      toggleLotExcludedFromMix,
+      setLotsIncludedInMixture,
+      includeAllLotsInMixture,
+      excludeAllLotsInMixture,
+      toggleProducerMixSelection,
+      setQualityBinBreakpoints,
+      resetQualityBinBreakpoints,
       runEngine,
       runStrategies,
       selectSuggestion,
@@ -847,8 +986,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       getExplainRelaxation,
       hasCostDataFn,
       applyQualityBaseline,
-      setSolverMode,
-      setSolverOptions,
     ]
   );
 

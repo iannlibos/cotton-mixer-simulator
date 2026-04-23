@@ -1,21 +1,20 @@
 import { useEffect } from "react";
 import { useApp } from "../context/AppContext";
 import { fmtBRL } from "../engine/sequencer";
+import { ThresholdLimitsEditor } from "./ThresholdLimitsEditor";
 
 export function PageStep2() {
   const {
     curStep,
-    stock,
+    stockForMixture,
     targetWeight,
     mixName,
     suggestions,
-    solverMode,
     isGenerating,
     generationStatus,
     generationProgress,
     setTargetWeight,
     setMixName,
-    setCurPage,
     runStrategies,
     selectSuggestion,
     hasCostData,
@@ -24,11 +23,11 @@ export function PageStep2() {
   const hcd = hasCostData();
 
   useEffect(() => {
-    if (stock.length) {
-      const tP = stock.reduce((s, r) => s + r.peso, 0);
+    if (stockForMixture.length) {
+      const tP = stockForMixture.reduce((s, r) => s + r.peso, 0);
       setTargetWeight(Math.round(tP * 0.15 * 100) / 100 || 30);
     }
-  }, [stock.length, setTargetWeight]);
+  }, [stockForMixture, setTargetWeight]);
 
   const steps = [
     { n: 1, l: "Estoque" },
@@ -36,8 +35,9 @@ export function PageStep2() {
     { n: 3, l: "Revisar" },
   ];
 
-  const avgCusto = stock.length
-    ? stock.reduce((s, l) => s + l.custo * l.peso, 0) / stock.reduce((s, l) => s + l.peso, 0)
+  const avgCusto = stockForMixture.length
+    ? stockForMixture.reduce((s, l) => s + l.custo * l.peso, 0) /
+      stockForMixture.reduce((s, l) => s + l.peso, 0)
     : 0;
 
   return (
@@ -57,8 +57,10 @@ export function PageStep2() {
       </div>
       <div className="pg-title">Gerar Mistura</div>
       <div className="pg-sub">
-        A engine gera <strong style={{ color: "var(--em, var(--cy))" }}>4 sugestões</strong>{" "}
-        (3 estratégias + otimizador) para você comparar e escolher a melhor.
+        A engine gera <strong style={{ color: "var(--em, var(--cy))" }}>3 sugestões</strong>{" "}
+        (Engine Otimizada, Monte Carlo e Simulated Annealing) para você comparar e escolher a melhor. Com
+        sugestões prontas, elas surgem <strong>acima</strong> do bloco de limites; confira, ajuste e gere de novo
+        se precisar.
       </div>
       <div className="card">
         <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -91,34 +93,17 @@ export function PageStep2() {
             disabled={isGenerating}
             onClick={() => void runStrategies(targetWeight)}
           >
-            {isGenerating ? "⚡ Gerando…" : "⚡ Gerar 4 Sugestões"}
-          </button>
-          <button
-            className="btn btn-s btn-sm"
-            style={{ height: 38 }}
-            onClick={() => setCurPage("config")}
-          >
-            ⚙️ Parâmetros
+            {isGenerating ? "⚡ Gerando…" : "⚡ Gerar 3 Sugestões"}
           </button>
         </div>
       </div>
 
-      {suggestions.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--tx3)" }}>
-          <div style={{ fontSize: 48, opacity: 0.3, marginBottom: 12 }}>💰</div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>
-            Clique em &quot;Gerar 4 Sugestões&quot; para iniciar
-          </div>
-          <div style={{ fontSize: 12, marginTop: 6, maxWidth: 540, marginLeft: "auto", marginRight: "auto", lineHeight: 1.6 }}>
-            Cada estratégia otimiza por um objetivo diferente, respeitando os mesmos limites de qualidade. Você escolhe a que faz mais sentido para o momento.
-          </div>
-        </div>
-      ) : (
+      {suggestions.length > 0 && (
         <div className="sug-grid">
           {suggestions.map((s, i) => {
             const p = s.params;
             const v = s.violations;
-            const nProds = [...new Set(s.lots.map(l => l.produtor))].length;
+            const nProds = [...new Set(s.lots.map((l) => l.produtor))].length;
             const wMatch = Math.abs(p.weight - targetWeight) <= Math.max(0.01, targetWeight * 0.005);
             const costVsAvg = p.custoTon > avgCusto
               ? `↑ ${fmtBRL(p.custoTon - avgCusto)} acima`
@@ -206,28 +191,34 @@ export function PageStep2() {
         </div>
       )}
 
+      <div className="card">
+        <ThresholdLimitsEditor variant="compact" showStockRange />
+      </div>
+
+      {suggestions.length === 0 && (
+        <div style={{ padding: 40, textAlign: "center", color: "var(--tx3)" }}>
+          <div style={{ fontSize: 48, opacity: 0.3, marginBottom: 12 }}>💰</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            Clique em &quot;Gerar 3 Sugestões&quot; para iniciar
+          </div>
+          <div style={{ fontSize: 12, marginTop: 6, maxWidth: 540, marginLeft: "auto", marginRight: "auto", lineHeight: 1.6 }}>
+            Cada estratégia otimiza por um objetivo diferente, respeitando os mesmos limites de qualidade. Você escolhe a que faz mais sentido para o momento.
+          </div>
+        </div>
+      )}
+
       {isGenerating && (
         <div className="gen-loading-overlay" role="status" aria-live="polite" aria-busy="true">
           <div className="gen-loading-card">
-            {solverMode === "classic" ? (
-              <>
-                <div className="gen-spinner" aria-hidden />
-                <div className="gen-loading-title">Gerando misturas…</div>
-                <div className="gen-loading-status">{generationStatus}</div>
-              </>
-            ) : (
-              <>
-                <div className="gen-loading-title">Gerando sugestões…</div>
-                <div className="gen-progress-wrap" aria-hidden>
-                  <div
-                    className="gen-progress-bar"
-                    style={{ width: `${Math.min(100, Math.max(0, generationProgress))}%` }}
-                  />
-                </div>
-                <div className="gen-loading-pct">{Math.min(100, Math.max(0, generationProgress))}%</div>
-                <div className="gen-loading-status">{generationStatus}</div>
-              </>
-            )}
+            <div className="gen-loading-title">Gerando sugestões…</div>
+            <div className="gen-progress-wrap" aria-hidden>
+              <div
+                className="gen-progress-bar"
+                style={{ width: `${Math.min(100, Math.max(0, generationProgress))}%` }}
+              />
+            </div>
+            <div className="gen-loading-pct">{Math.min(100, Math.max(0, generationProgress))}%</div>
+            <div className="gen-loading-status">{generationStatus}</div>
           </div>
         </div>
       )}

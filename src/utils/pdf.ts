@@ -5,10 +5,11 @@ import { PARAMS, buildDefaultThresholds, type Thresholds } from "@/domain/types"
 import {
   computeSeqParams,
   fmtBRL,
-  iqColor,
   seqParamOk,
-  type SeqBale,
+  buildLayoutPlan,
+  summarizeComposition,
   type SeqSide,
+  type LayoutPlan,
 } from "@/engine/sequencer";
 import { fmtParam } from "@/utils/paramFormat";
 
@@ -19,41 +20,138 @@ declare module "jspdf" {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Paleta de impressão P&B                                                   */
+/*                                                                            */
+/*  Todo o PDF é pensado para impressora monocromática: fundos claros, tinta  */
+/*  escura, reforço por **peso/grayscale** e não por matiz. Nenhuma informação*/
+/*  depende exclusivamente de cor.                                            */
+/* -------------------------------------------------------------------------- */
+
+type RGB = [number, number, number];
+
+const PAPER: RGB = [255, 255, 255];
+const TINT: RGB = [244, 244, 244]; // fundo muito claro (linhas alternadas, headers leves)
+const TINT2: RGB = [222, 222, 222]; // realces finos
+const RULE: RGB = [170, 170, 170]; // linhas de grade claras
+const RULE_DK: RGB = [60, 60, 60]; // linhas de grade fortes
+const INK: RGB = [20, 20, 20]; // texto primário
+const INK_SOFT: RGB = [70, 70, 70]; // texto secundário
+const INK_MUTE: RGB = [120, 120, 120]; // labels discretos
+
+function setFill(doc: jsPDF, c: RGB) {
+  doc.setFillColor(c[0], c[1], c[2]);
+}
+function setDraw(doc: jsPDF, c: RGB) {
+  doc.setDrawColor(c[0], c[1], c[2]);
+}
+function setText(doc: jsPDF, c: RGB) {
+  doc.setTextColor(c[0], c[1], c[2]);
+}
+
+/**
+ * Classificação do IQ em faixas com tonalidade monotônica (claro → escuro)
+ * e letra-classe (E/B/R/F). Mantém distinção imediata sob preto e branco
+ * mesmo quando tons vizinhos ficam parecidos na impressão.
+ */
+interface IQBand {
+  letter: "E" | "B" | "R" | "F";
+  label: string;
+  /** Cor de preenchimento do fardo. */
+  fill: RGB;
+  /** Cor do texto sobre o fardo. */
+  text: RGB;
+  /** Cor da borda. */
+  border: RGB;
+  /** Espessura da borda em mm. */
+  borderW: number;
+}
+
+function iqBand(iq: number): IQBand {
+  if (iq >= 75)
+    return {
+      letter: "E",
+      label: "Excelente (≥75)",
+      fill: [255, 255, 255],
+      text: [0, 0, 0],
+      border: [0, 0, 0],
+      borderW: 0.7,
+    };
+  if (iq >= 55)
+    return {
+      letter: "B",
+      label: "Bom (55–74)",
+      fill: [228, 228, 228],
+      text: [0, 0, 0],
+      border: [40, 40, 40],
+      borderW: 0.3,
+    };
+  if (iq >= 35)
+    return {
+      letter: "R",
+      label: "Regular (35–54)",
+      fill: [162, 162, 162],
+      text: [0, 0, 0],
+      border: [40, 40, 40],
+      borderW: 0.3,
+    };
+  return {
+    letter: "F",
+    label: "Fraco (<35)",
+    fill: [68, 68, 68],
+    text: [255, 255, 255],
+    border: [0, 0, 0],
+    borderW: 0.3,
+  };
+}
+
+/**
+ * Trunca `text` com reticências até caber em `maxWmm` na fonte atual. Usa o
+ * `getTextWidth` do jsPDF, portanto depende da fonte/tamanho setados antes.
+ */
+function shrinkToWidth(doc: jsPDF, text: string, maxWmm: number): string {
+  if (!text) return text;
+  if (doc.getTextWidth(text) <= maxWmm) return text;
+  let lo = 1;
+  let hi = text.length;
+  let best = 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const cand = text.slice(0, mid) + "…";
+    if (doc.getTextWidth(cand) <= maxWmm) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return text.slice(0, Math.max(1, best)) + "…";
+}
+
+const fmt1 = (n: number) => n.toFixed(1).replace(".", ",");
+
+/* -------------------------------------------------------------------------- */
+/*  PDF "Gerador de misturas" (tela inicial)                                  */
+/* -------------------------------------------------------------------------- */
+
 export function buildPDF(
   name: string,
   date: string,
   params: MixParams,
   lots: Lot[],
-  thresholds: Thresholds
+  thresholds: Thresholds,
 ): jsPDF {
   const doc = new jsPDF("landscape", "mm", "a4");
   const w = doc.internal.pageSize.getWidth();
 
-  doc.setFillColor(11, 15, 26);
-  doc.rect(0, 0, w, 28, "F");
-  doc.setTextColor(34, 211, 238);
-  doc.setFontSize(9);
-  doc.text("SANTANA TEXTILES · GERADOR DE MISTURAS", 14, 12);
-  doc.setTextColor(232, 234, 240);
-  doc.setFontSize(16);
-  doc.setFont(undefined as never, "bold");
-  doc.text(name, 14, 22);
-  doc.setFontSize(9);
-  doc.setFont(undefined as never, "normal");
-  doc.setTextColor(154, 161, 185);
-  doc.text(
-    `${date}  |  ${lots.length} lotes  |  ${params.bales} fardos  |  ${params.weight.toFixed(2)} ton`,
-    w - 14,
-    22,
-    { align: "right" }
-  );
+  drawDocHeader(doc, w, 14, "SANTANA TEXTILES · GERADOR DE MISTURAS", name, `${date}  ·  ${lots.length} lotes  ·  ${params.bales} fardos  ·  ${params.weight.toFixed(2)} ton`);
 
-  let y = 36;
-  doc.setFontSize(10);
-  doc.setTextColor(34, 211, 238);
-  doc.setFont(undefined as never, "bold");
+  let y = 38;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  setText(doc, INK);
   doc.text("PARÂMETROS", 14, y);
-  y += 7;
+  y += 5;
 
   doc.autoTable({
     startY: y,
@@ -61,12 +159,33 @@ export function buildPDF(
     body: PARAMS.filter((p) => p.key !== "mat").map((p) => {
       const v = params[p.key as keyof MixParams];
       const t = thresholds[p.key] || { min: 0, max: 1 };
-      return [p.label, v.toFixed(p.prec), t.min, t.max, v >= t.min && v <= t.max ? "OK" : "FORA"];
+      return [
+        p.label,
+        v.toFixed(p.prec),
+        String(t.min),
+        String(t.max),
+        v >= t.min && v <= t.max ? "OK" : "FORA",
+      ];
     }),
-    theme: "grid",
+    ...lightTableStyles(),
+    didParseCell: (data: unknown) => {
+      const d = data as { section: string; column: { index: number }; cell: { styles: Record<string, unknown>; raw: string } };
+      if (d.section === "body" && d.column.index === 4) {
+        const fora = d.cell.raw === "FORA";
+        d.cell.styles.fontStyle = "bold";
+        d.cell.styles.halign = "center";
+        if (fora) {
+          d.cell.styles.fillColor = INK;
+          d.cell.styles.textColor = PAPER;
+        }
+      }
+    },
   });
 
   y = doc.lastAutoTable.finalY + 10;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  setText(doc, INK);
   doc.text("COMPOSIÇÃO", 14, y);
   y += 5;
 
@@ -74,13 +193,29 @@ export function buildPDF(
   const sortedLots = [...lots].sort((a, b) => (b.allocWeight || 0) - (a.allocWeight || 0));
   doc.autoTable({
     startY: y,
-    head: [["Produtor", "Lote", "Fardos", "Peso (ton)", "%", "UHML (mm)", "STR", "ELG", "UI", "MIC", "SF", "MST", "SCI"]],
+    head: [
+      [
+        "Produtor",
+        "Lote",
+        "Fardos",
+        "Peso (ton)",
+        "%",
+        "UHML (mm)",
+        "STR",
+        "ELG",
+        "UI",
+        "MIC",
+        "SF",
+        "MST",
+        "SCI",
+      ],
+    ],
     body: sortedLots.map((l) => [
       l.produtor,
       l.lote,
       l.allocBales,
       (l.allocWeight || 0).toFixed(2),
-      ((l.allocWeight || 0) / tw * 100).toFixed(1) + "%",
+      (((l.allocWeight || 0) / tw) * 100).toFixed(1) + "%",
       fmtParam("uhml", l.uhml),
       fmtParam("str_val", l.str_val),
       fmtParam("elg", l.elg),
@@ -90,11 +225,68 @@ export function buildPDF(
       fmtParam("mst", l.mst),
       fmtParam("sci", l.sci),
     ]),
-    theme: "grid",
+    ...lightTableStyles(),
   });
 
   return doc;
 }
+
+/** Estilos compartilhados dos autoTables (tema claro, impressão P&B). */
+function lightTableStyles() {
+  return {
+    theme: "grid" as const,
+    headStyles: {
+      fillColor: INK,
+      textColor: PAPER,
+      fontStyle: "bold" as const,
+      fontSize: 8,
+      cellPadding: 2,
+      lineColor: INK,
+      lineWidth: 0.2,
+    },
+    bodyStyles: {
+      fontSize: 8,
+      textColor: INK,
+      cellPadding: 1.8,
+      fillColor: PAPER,
+      lineColor: RULE,
+      lineWidth: 0.1,
+    },
+    alternateRowStyles: { fillColor: TINT },
+    styles: { valign: "middle" as const, font: "helvetica" as const },
+    tableLineColor: RULE,
+    tableLineWidth: 0.1,
+  };
+}
+
+/**
+ * Cabeçalho genérico de documento: faixa branca com título forte e regra
+ * horizontal — sem blocos escuros que gastariam toner e ainda ofuscariam o
+ * texto na impressão P&B.
+ */
+function drawDocHeader(doc: jsPDF, pageW: number, m: number, eyebrow: string, title: string, sub: string) {
+  setFill(doc, PAPER);
+  doc.rect(0, 0, pageW, 30, "F");
+  setText(doc, INK_SOFT);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text(eyebrow, m, 9);
+  setText(doc, INK);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text(title, m, 18);
+  setText(doc, INK_SOFT);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.text(sub, m, 25);
+  setDraw(doc, INK);
+  doc.setLineWidth(0.5);
+  doc.line(m, 30, pageW - m, 30);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  PDF "Sequências"                                                          */
+/* -------------------------------------------------------------------------- */
 
 export interface BuildSeqPdfInput {
   mixName: string;
@@ -103,7 +295,7 @@ export interface BuildSeqPdfInput {
   seqWeightKg: number;
   baleWtKg: number;
   sequences: SeqSide[];
-  /** Para cores OK/fora nos parâmetros (igual à tela). */
+  /** Para marcação OK/FORA nos parâmetros (igual à tela). */
   thresholds?: Thresholds;
   bps?: number;
   used?: number;
@@ -111,60 +303,278 @@ export interface BuildSeqPdfInput {
   totalBales?: number;
 }
 
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-function iqRgb(iq: number): [number, number, number] {
-  return hexToRgb(iqColor(iq));
-}
-
-function truncateLote(lote: string, maxChars: number): string {
-  if (lote.length <= maxChars) return lote;
-  return lote.slice(0, Math.max(0, maxChars - 1)) + "…";
-}
-
-/** Fardos empilhados verticalmente (ordem: topo = primeiro da sequência). */
-function drawBaleColumn(
-  doc: jsPDF,
-  yStart: number,
-  x: number,
-  colW: number,
-  bales: SeqBale[],
-  gapV: number,
-  boxH: number,
-): number {
-  const n = bales.length;
-  if (!n) return yStart;
-  const fontLote = boxH >= 12 ? 7 : boxH >= 9 ? 6.5 : boxH >= 7 ? 6 : 5;
-  const fontProd = Math.max(3.8, fontLote - 1.6);
-  const fontIq = Math.max(4.5, fontLote - 1);
-  const maxLoteChars = colW >= 28 ? 16 : colW >= 20 ? 12 : 8;
-  const maxProdChars = maxLoteChars + 4;
-  for (let i = 0; i < n; i++) {
-    const y = yStart + i * (boxH + gapV);
-    const b = bales[i];
-    const [r, g, b_] = iqRgb(b.iq);
-    doc.setFillColor(r, g, b_);
-    doc.roundedRect(x, y, colW, boxH, 0.8, 0.8, "F");
-    doc.setDrawColor(20, 25, 35);
-    doc.setLineWidth(0.15);
-    doc.roundedRect(x, y, colW, boxH, 0.8, 0.8, "S");
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(fontLote);
-    const lote = truncateLote(b.lote, maxLoteChars);
-    doc.text(lote, x + colW / 2, y + boxH * 0.30, { align: "center" });
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(fontProd);
-    doc.text(truncateLote(b.produtor, maxProdChars), x + colW / 2, y + boxH * 0.54, { align: "center" });
-    doc.setFontSize(fontIq);
-    doc.text(String(Math.round(b.iq)), x + colW / 2, y + boxH * 0.80, { align: "center" });
+/**
+ * Decide pontos de corte (em metros no eixo X) para quebrar a pista em
+ * `rows` linhas, snapando o corte para a borda mais próxima entre fardos —
+ * de modo que nenhum fardo seja partido visualmente entre linhas.
+ */
+function computeRowCuts(plan: LayoutPlan, rows: number): number[] {
+  if (rows <= 1) return [];
+  const cuts: number[] = [];
+  for (let r = 1; r < rows; r++) {
+    const target = (r * plan.areaLength) / rows;
+    const candidates: number[] = [target];
+    plan.placements.forEach((p) => {
+      candidates.push(p.x);
+      candidates.push(p.x + p.w);
+    });
+    candidates.sort((a, b) => Math.abs(a - target) - Math.abs(b - target));
+    let pick = target;
+    for (const c of candidates) {
+      if (c < 1e-6 || c > plan.areaLength - 1e-6) continue;
+      const crosses = plan.placements.some(
+        (p) => c > p.x + 1e-6 && c < p.x + p.w - 1e-6,
+      );
+      if (!crosses) {
+        pick = c;
+        break;
+      }
+    }
+    cuts.push(pick);
   }
-  return yStart + n * (boxH + gapV) - gapV;
+  return cuts;
 }
 
+/**
+ * Desenha um fardo: preenchimento em escala de cinza da faixa de IQ, letra-
+ * classe no canto, produtor/lote/tamanho·IQ centralizados com tamanho de
+ * fonte dimensionado pela área do fardo. Todo texto passa por
+ * `shrinkToWidth` para ser truncado com reticências apenas quando necessário.
+ *
+ * As fórmulas de fonte usam a conversão correta (1 pt ≈ 0,353 mm, leading
+ * ~1,2): para N linhas em `ph` mm de altura disponível, a fonte máxima por
+ * linha é aproximadamente `ph / N × 2`. Os coeficientes abaixo refletem isso
+ * e aproveitam a área disponível — o código antigo tratava `ph` em mm como
+ * cap em pt e travava tudo em 4–5 pt.
+ */
+function drawBale(
+  doc: jsPDF,
+  px: number,
+  py: number,
+  pw: number,
+  ph: number,
+  produtor: string,
+  lote: string,
+  iq: number,
+  tamanho: string,
+) {
+  const band = iqBand(iq);
+  setFill(doc, band.fill);
+  setDraw(doc, band.border);
+  doc.setLineWidth(band.borderW);
+  doc.rect(px, py, pw, ph, "FD");
+
+  // Letra-classe no canto superior esquerdo (E/B/R/F). Reforço redundante
+  // ao tom — permanece legível mesmo se a impressora achatar os cinzas.
+  if (pw >= 6 && ph >= 5.5) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    setText(doc, band.text);
+    doc.text(band.letter, px + 1.1, py + 3);
+  }
+
+  const pad = 0.9;
+  const contentW = pw - 2 * pad;
+  setText(doc, band.text);
+
+  // Fardos **transversais** (altos e estreitos: largura < altura e
+  // largura útil típica ~13 mm) não comportam o produtor em linha única.
+  // O nome do produtor é quebrado em **uma palavra por linha**, seguindo
+  // de lote e tamanho · IQ. Aproveita-se toda a altura disponível e a
+  // fonte é dimensionada pelo line-height resultante.
+  const isTransversal = pw < ph && pw <= 22 && ph >= 18;
+
+  if (isTransversal) {
+    const words = produtor.trim().split(/\s+/).filter(Boolean);
+    // Cap em 3 linhas de produtor — cobre virtualmente todos os nomes
+    // (ex.: "JOSE ALMIR GORGEN"). Nomes com 4+ palavras concatenam o
+    // excedente na última linha.
+    const prodLines: string[] =
+      words.length === 0
+        ? [produtor]
+        : words.length <= 3
+          ? words
+          : [words[0], words[1], words.slice(2).join(" ")];
+
+    const infoLines: { text: string; bold: boolean; scale: number }[] = [
+      ...prodLines.map((w) => ({ text: w, bold: true, scale: 1 })),
+      { text: lote, bold: true, scale: 0.9 },
+      { text: `${tamanho} · IQ ${Math.round(iq)}`, bold: false, scale: 0.78 },
+    ];
+
+    const topOffset = 4.2; // reserva p/ a letra-classe no canto
+    const botOffset = 1.2;
+    const availH = ph - topOffset - botOffset;
+    const lineH = availH / infoLines.length;
+    // Fonte base que caiba na linha com leading ~1,25. Cap em 8,5 pt
+    // porque, a 15 mm de largura útil, "SILVANA"/"VARNIER" (7 chars) já
+    // ocupam ~12,6 mm — qualquer valor acima trunca.
+    const basePt = Math.max(5.5, Math.min(8.5, lineH / 0.44));
+
+    for (let i = 0; i < infoLines.length; i++) {
+      const l = infoLines[i];
+      const baseline = py + topOffset + (i + 0.72) * lineH;
+      doc.setFont("helvetica", l.bold ? "bold" : "normal");
+      doc.setFontSize(basePt * l.scale);
+      doc.text(
+        shrinkToWidth(doc, l.text, contentW),
+        px + pw / 2,
+        baseline,
+        { align: "center" },
+      );
+    }
+    return;
+  }
+
+  // Fardos longitudinais / quadrados: layout centralizado tradicional.
+  const canFitThree = ph >= 17 && pw >= 8;
+  const canFitTwo = ph >= 10 && pw >= 7;
+
+  if (canFitThree) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(Math.min(13, ph * 0.45));
+    doc.text(
+      shrinkToWidth(doc, produtor, contentW),
+      px + pw / 2,
+      py + ph * 0.33,
+      { align: "center" },
+    );
+
+    doc.setFontSize(Math.min(10.5, ph * 0.35));
+    doc.text(
+      shrinkToWidth(doc, lote, contentW),
+      px + pw / 2,
+      py + ph * 0.6,
+      { align: "center" },
+    );
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(Math.min(8, ph * 0.26));
+    doc.text(
+      shrinkToWidth(doc, `${tamanho} · IQ ${Math.round(iq)}`, contentW),
+      px + pw / 2,
+      py + ph * 0.85,
+      { align: "center" },
+    );
+  } else if (canFitTwo) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(Math.min(12, ph * 0.6));
+    doc.text(
+      shrinkToWidth(doc, produtor, contentW),
+      px + pw / 2,
+      py + ph * 0.42,
+      { align: "center" },
+    );
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(Math.min(9.5, ph * 0.45));
+    // Fardos longitudinais costumam ter largura útil >30 mm; colocar IQ na
+    // segunda linha evita sacrificar a informação só porque sobra espaço.
+    doc.text(
+      shrinkToWidth(
+        doc,
+        `${lote} · ${tamanho} · IQ ${Math.round(iq)}`,
+        contentW,
+      ),
+      px + pw / 2,
+      py + ph * 0.78,
+      { align: "center" },
+    );
+  } else if (pw >= 4 && ph >= 3.5) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(Math.min(8, ph * 0.9));
+    doc.text(tamanho, px + pw / 2, py + ph / 2 + 1, { align: "center" });
+  }
+}
+
+/**
+ * Layout físico com a pista quebrada em `rows` linhas. Cada linha usa a
+ * mesma escala (a linha mais longa ocupa toda a largura `w`), preservando
+ * proporção real entre os fardos das duas linhas.
+ */
+function drawLayoutStripWrapped(
+  doc: jsPDF,
+  plan: LayoutPlan,
+  x0: number,
+  y0: number,
+  w: number,
+  rows: number,
+): number {
+  const cuts = computeRowCuts(plan, rows);
+  const bounds = [0, ...cuts, plan.areaLength];
+  const rowLens = bounds.slice(1).map((e, i) => e - bounds[i]);
+  const maxRowLen = Math.max(...rowLens);
+  const scale = w / maxRowLen;
+  const armH = plan.areaWidth * scale;
+  const canvasH = plan.canvasHeight * scale;
+  // Espaço entre linhas (inclui 1 mm visual + ~5 mm de ticks/rótulos). Valor
+  // apertado o suficiente para caber 3 linhas de pista + cromos + rodapé em
+  // A3 paisagem, mesmo nos modos com canvas estendido (endcaps de 2,32 m).
+  const rowGap = 8;
+  let yCur = y0;
+
+  for (let r = 0; r < rows; r++) {
+    const xStart = bounds[r];
+    const xEnd = bounds[r + 1];
+    const rowLen = xEnd - xStart;
+    const rowW = rowLen * scale;
+    const armTop = yCur + plan.armYOffset * scale;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    setText(doc, INK_SOFT);
+    doc.text(
+      `${fmt1(xStart)} m  →  ${fmt1(xEnd)} m`,
+      x0,
+      yCur - 2,
+    );
+
+    setFill(doc, TINT);
+    setDraw(doc, RULE_DK);
+    doc.setLineWidth(0.4);
+    doc.roundedRect(x0, armTop, rowW, armH, 0.8, 0.8, "FD");
+
+    setDraw(doc, RULE);
+    doc.setLineWidth(0.2);
+    doc.setLineDashPattern([1.2, 1.4], 0);
+    doc.line(x0, armTop + armH / 2, x0 + rowW, armTop + armH / 2);
+    doc.setLineDashPattern([], 0);
+
+    // Ticks do eixo X a cada 5 m, ancorados no grid absoluto da pista.
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    setText(doc, INK_SOFT);
+    const firstTick = Math.ceil(xStart / 5) * 5;
+    for (let t = firstTick; t <= xEnd + 1e-6; t += 5) {
+      const xt = x0 + (t - xStart) * scale;
+      setDraw(doc, RULE_DK);
+      doc.setLineWidth(0.2);
+      doc.line(xt, yCur + canvasH, xt, yCur + canvasH + 1.4);
+      doc.text(`${t.toFixed(0)} m`, xt, yCur + canvasH + 5, { align: "center" });
+    }
+
+    plan.placements.forEach((p) => {
+      const center = p.x + p.w / 2;
+      if (center < xStart - 1e-6 || center > xEnd + 1e-6) return;
+      const px = x0 + (p.x - xStart) * scale;
+      const py = yCur + p.y * scale;
+      const pw = p.w * scale;
+      const ph = p.h * scale;
+      drawBale(doc, px, py, pw, ph, p.bale.produtor, p.bale.lote, p.bale.iq, p.tamanho);
+    });
+
+    yCur += canvasH + rowGap;
+  }
+  return yCur;
+}
+
+/**
+ * Bloco 2×4 com as métricas de qualidade da sequência. Cada chip tem
+ * contraste P&B:
+ *  - FORA   → preenchimento escuro + texto branco bold (alto peso visual)
+ *  - OK     → papel branco com borda fina e texto escuro
+ *  - Neutro → idem OK, sem "status" (ex.: R$/TON)
+ */
 function drawQualityChips(
   doc: jsPDF,
   ix: number,
@@ -176,6 +586,8 @@ function drawQualityChips(
   const paramKeys = ["uhml", "str_val", "elg", "ui", "mic", "sf", "mst"] as const;
   const chipGap = 3;
   const chipW = (innerW - 3 * chipGap) / 4;
+  // Altura apertada (era 13) para liberar espaço vertical ao layout físico
+  // em 3 linhas no A3 paisagem sem invadir o rodapé.
   const chipH = 11;
   const chips: { label: string; val: string; ok: boolean | null }[] = [
     ...paramKeys.map((k) => {
@@ -193,20 +605,32 @@ function drawQualityChips(
     const col = i % 4;
     const px = ix + col * (chipW + chipGap);
     const py = cy + Math.floor(i / 4) * (chipH + chipGap);
-    doc.setFillColor(19, 24, 37);
-    doc.setDrawColor(48, 56, 78);
-    doc.roundedRect(px, py, chipW, chipH, 1, 1, "FD");
+    const fora = c.ok === false;
+
+    setFill(doc, fora ? INK : PAPER);
+    setDraw(doc, INK);
+    doc.setLineWidth(fora ? 0.4 : 0.35);
+    doc.roundedRect(px, py, chipW, chipH, 1.2, 1.2, "FD");
+
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(5.5);
-    doc.setTextColor(180, 188, 210);
-    doc.text(c.label, px + chipW / 2, py + 3.5, { align: "center" });
-    doc.setFontSize(c.ok === null ? 6.5 : 8);
-    if (c.ok === null) doc.setTextColor(34, 211, 238);
-    else doc.setTextColor(c.ok ? 52 : 239, c.ok ? 211 : 68, c.ok ? 153 : 68);
-    doc.text(c.val, px + chipW / 2, py + 9, { align: "center" });
+    doc.setFontSize(6.5);
+    setText(doc, fora ? [205, 205, 205] : INK_MUTE);
+    doc.text(c.label, px + chipW / 2, py + 4, { align: "center" });
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(c.ok === null ? 8.5 : 10);
+    setText(doc, fora ? PAPER : INK);
+    doc.text(c.val, px + chipW / 2, py + 9.4, { align: "center" });
+
+    if (fora) {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(5.6);
+      setText(doc, PAPER);
+      doc.text("FORA", px + chipW - 2, py + 4, { align: "right" });
+    }
   });
-  const rows = Math.ceil(chips.length / 4);
-  return cy + rows * chipH + (rows - 1) * chipGap + 4;
+  const rowsN = Math.ceil(chips.length / 4);
+  return cy + rowsN * chipH + (rowsN - 1) * chipGap + 3;
 }
 
 function drawSeqFooter(
@@ -218,8 +642,8 @@ function drawSeqFooter(
   totalPages: number,
   shortHint?: string,
 ) {
-  doc.setFontSize(6);
-  doc.setTextColor(72, 78, 95);
+  doc.setFontSize(7);
+  setText(doc, INK_MUTE);
   doc.setFont("helvetica", "normal");
   const ts = new Date().toLocaleString("pt-BR");
   const base =
@@ -231,22 +655,10 @@ function drawSeqFooter(
     "/" +
     totalPages;
   const lines = doc.splitTextToSize(base, pageW - 2 * m);
-  doc.text(lines, m, pageH - 4 - Math.max(0, lines.length - 1) * 2.2);
+  doc.text(lines, m, pageH - 5 - Math.max(0, lines.length - 1) * 2.5);
 }
 
-function drawSummaryStrip(doc: jsPDF, pageW: number, m: number, subtitle: string) {
-  doc.setFillColor(11, 15, 26);
-  doc.rect(0, 0, pageW, 28, "F");
-  doc.setTextColor(34, 211, 238);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.text("SANTANA TEXTILES · PLANEJADOR DE SEQUÊNCIAS", m, 10);
-  doc.setTextColor(232, 234, 240);
-  doc.setFontSize(14);
-  doc.text(subtitle, m, 19);
-}
-
-/** Página 1: resumo. Páginas seguintes: uma sequência por página (A4 retrato), fardos grandes como na tela. */
+/** Página 1: resumo A4 retrato. Demais páginas: 1 sequência por A3 paisagem. */
 export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
   const { mixName, params, lots, seqWeightKg, baleWtKg, sequences } = input;
   const thresholds = input.thresholds ?? buildDefaultThresholds();
@@ -260,22 +672,22 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
   let pageW = doc.internal.pageSize.getWidth();
   let pageH = doc.internal.pageSize.getHeight();
 
-  drawSummaryStrip(doc, pageW, m, mixName || "Mistura");
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(55, 62, 78);
-  doc.text(
-    `${params.weight != null ? Number(params.weight).toFixed(2) : "—"} t · ${params.bales != null ? params.bales : "—"} fardos · ${(baleWtKg || 0).toFixed(1)} kg/fardo · alvo ${seqWeightKg} kg/seq`,
+  // --- Capa / resumo (A4 retrato, tema claro) ---
+  drawDocHeader(
+    doc,
+    pageW,
     m,
-    25,
+    "SANTANA TEXTILES · PLANEJADOR DE SEQUÊNCIAS",
+    mixName || "Mistura",
+    `${params.weight != null ? Number(params.weight).toFixed(2) : "—"} t · ${params.bales != null ? params.bales : "—"} fardos · ${(baleWtKg || 0).toFixed(1)} kg/fardo · alvo ${seqWeightKg} kg/seq`,
   );
 
-  let y = 36;
+  let y = 40;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(34, 211, 238);
+  doc.setFontSize(11);
+  setText(doc, INK);
   doc.text("Resumo", m, y);
-  y += 7;
+  y += 6;
 
   const bwk = baleWtKg || 213;
   const nSeq = sequences.length;
@@ -294,50 +706,61 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
   const kpiW = (pageW - 2 * m - gapK * (kpi.length - 1)) / kpi.length;
   kpi.forEach((k, i) => {
     const x = m + i * (kpiW + gapK);
-    doc.setFillColor(26, 32, 53);
-    doc.setDrawColor(48, 56, 78);
-    doc.roundedRect(x, y, kpiW, 18, 2, 2, "FD");
+    // Accent (alerta) inverte cores para destacar sem depender de matiz.
+    setFill(doc, k.accent ? INK : PAPER);
+    setDraw(doc, INK);
+    doc.setLineWidth(0.35);
+    doc.roundedRect(x, y, kpiW, 20, 2, 2, "FD");
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(6);
-    doc.setTextColor(120, 128, 160);
-    doc.text(k.label.toUpperCase(), x + kpiW / 2, y + 5, { align: "center" });
-    doc.setFontSize(11);
-    doc.setTextColor(k.accent ? 251 : 34, k.accent ? 191 : 211, k.accent ? 36 : 238);
-    doc.text(k.value, x + kpiW / 2, y + 13, { align: "center" });
+    doc.setFontSize(7);
+    setText(doc, k.accent ? [210, 210, 210] : INK_MUTE);
+    doc.text(k.label.toUpperCase(), x + kpiW / 2, y + 6, { align: "center" });
+    doc.setFontSize(13);
+    setText(doc, k.accent ? PAPER : INK);
+    doc.text(k.value, x + kpiW / 2, y + 15, { align: "center" });
   });
-  y += 24;
+  y += 26;
 
   if (dropped > 0) {
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7);
-    doc.setTextColor(251, 191, 36);
-    doc.text(`${dropped} fardo(s) não usados para manter sequências pares.`, m, y);
-    y += 5;
+    // Aviso em pílula escura (inversa), destaque inequívoco no P&B.
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    setText(doc, INK);
+    const msg = `${dropped} fardo(s) não usados para manter sequências pares.`;
+    setFill(doc, TINT2);
+    setDraw(doc, INK);
+    doc.setLineWidth(0.3);
+    const tw = doc.getTextWidth(msg) + 6;
+    doc.roundedRect(m, y - 4, tw, 7, 1.2, 1.2, "FD");
+    doc.text(msg, m + 3, y + 0.8);
+    y += 7;
   }
 
-  const legendItems: { hex: string; label: string }[] = [
-    { hex: "#10b981", label: "≥75 Excelente" },
-    { hex: "#22d3ee", label: "55–74 Bom" },
-    { hex: "#fbbf24", label: "35–54 Regular" },
-    { hex: "#ef4444", label: "<35 Fraco" },
-  ];
+  // --- Legenda de IQ em escala de cinza ---
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(28, 32, 42);
-  doc.text("Cor do fardo = IQ (igual à tela)", m, y);
+  doc.setFontSize(9);
+  setText(doc, INK);
+  doc.text("Classe do fardo (IQ) · tonalidade clara → escura", m, y);
   y += 5;
-  let lx = m;
-  for (const it of legendItems) {
-    const [r, g, b] = hexToRgb(it.hex);
-    doc.setFillColor(r, g, b);
-    doc.rect(lx, y - 2.5, 3.2, 3.2, "F");
-    doc.setTextColor(55, 60, 72);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(6.5);
-    doc.text(it.label, lx + 5, y);
-    lx += 42;
-  }
-  y += 10;
+
+  const bands = [iqBand(80), iqBand(65), iqBand(45), iqBand(20)];
+  const legendW = (pageW - 2 * m - 3 * 4) / 4;
+  bands.forEach((b, i) => {
+    const x = m + i * (legendW + 4);
+    setFill(doc, b.fill);
+    setDraw(doc, b.border);
+    doc.setLineWidth(Math.max(0.3, b.borderW));
+    doc.rect(x, y, 10, 7, "FD");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    setText(doc, b.text);
+    doc.text(b.letter, x + 5, y + 4.8, { align: "center" });
+    setText(doc, INK);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.text(b.label, x + 12, y + 5);
+  });
+  y += 14;
 
   const pLotsRef: Record<string, string[]> = {};
   lots.forEach((l) => {
@@ -354,64 +777,52 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     ]);
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(28, 32, 42);
+  doc.setFontSize(9);
+  setText(doc, INK);
   doc.text("Produtores e lotes nesta mistura", m, y);
-  y += 5;
+  y += 4;
 
   doc.autoTable({
     startY: y,
     head: [["Produtor", "Lotes"]],
     body: prodRows,
-    theme: "grid",
-    headStyles: {
-      fillColor: [26, 32, 53],
-      textColor: [232, 234, 240],
-      fontSize: 7,
-      cellPadding: 2,
-      lineColor: [55, 65, 95],
-      lineWidth: 0.15,
-    },
-    bodyStyles: {
-      fontSize: 7,
-      textColor: [232, 234, 240],
-      cellPadding: 1.8,
-      fillColor: [22, 28, 42],
-      lineColor: [55, 65, 95],
-      lineWidth: 0.1,
-    },
-    alternateRowStyles: { fillColor: [28, 34, 50], textColor: [232, 234, 240] },
-    styles: { valign: "middle" },
-    columnStyles: { 0: { cellWidth: 40 }, 1: { cellWidth: pageW - m * 2 - 40 } },
+    ...lightTableStyles(),
+    columnStyles: { 0: { cellWidth: 50 }, 1: { cellWidth: pageW - m * 2 - 50 } },
     margin: { left: m, right: m },
-    tableLineColor: [55, 65, 95],
-    tableLineWidth: 0.1,
   });
 
+  // --- Páginas das sequências (A3 paisagem) ---
   sequences.forEach((seq, si) => {
-    doc.addPage("a4", "p");
+    // A3 paisagem (420 × 297 mm) dobra a escala de impressão e permite
+    // também reduzir para A4 com 71% mantendo legibilidade.
+    doc.addPage("a3", "l");
     pageW = doc.internal.pageSize.getWidth();
     pageH = doc.internal.pageSize.getHeight();
 
-    doc.setFillColor(11, 15, 26);
-    doc.rect(0, 0, pageW, 22, "F");
-    doc.setTextColor(34, 211, 238);
+    // Cabeçalho leve
+    setText(doc, INK_SOFT);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
-    doc.text("SANTANA TEXTILES · PLANEJADOR DE SEQUÊNCIAS", m, 8);
-    doc.setTextColor(200, 205, 220);
+    doc.setFontSize(8);
+    doc.text("SANTANA TEXTILES · PLANEJADOR DE SEQUÊNCIAS", m, 9);
+    setText(doc, INK_MUTE);
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(7);
-    doc.text(`${mixName || "Mistura"} · seq. ${si + 1} de ${sequences.length}`, m, 14);
-    doc.setTextColor(232, 234, 240);
+    doc.setFontSize(8);
+    doc.text(
+      `${mixName || "Mistura"} · seq. ${si + 1} de ${sequences.length}`,
+      pageW - m,
+      9,
+      { align: "right" },
+    );
+    setText(doc, INK);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(13);
-    doc.text(`Sequência ${si + 1}`, m, 20);
+    doc.setFontSize(18);
+    doc.text(`Sequência ${si + 1}`, m, 19);
+    setDraw(doc, INK);
+    doc.setLineWidth(0.5);
+    doc.line(m, 23, pageW - m, 23);
 
     const innerW = pageW - 2 * m;
     const ix = m;
-    const bottomReserve = 16;
-    const gapV = 1.2;
 
     const all = [...seq.a, ...seq.b];
     const n = all.length;
@@ -422,66 +833,86 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     const prds = new Set(all.map((b) => b.produtor)).size;
     const lts = new Set(all.map((b) => b.lote)).size;
 
-    let cy = 24;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8);
-    doc.setTextColor(28, 32, 42);
-    doc.text("Qualidade média da sequência", ix, cy);
-    cy += 5;
-    cy = drawQualityChips(doc, ix, cy, innerW, sp, thresholds);
+    const comp = summarizeComposition(all);
+    const plan = buildLayoutPlan(seq);
 
-    const metaRowTop = cy;
-    const metaRowH = 12;
-    const badgeW = 40;
-    const badgeH = 10;
+    // Meta (contagem de fardos/peso/composição) à esquerda + selo IQ no canto.
+    // Colocado imediatamente após o cabeçalho para deixar os chips e a pista
+    // acima da dobra inferior do A3 paisagem, sem competir por espaço
+    // vertical com as 3 linhas de layout.
+    const metaRowTop = 27;
+    const badgeW = 52;
+    const badgeH = 13;
     const badgeX = pageW - m - badgeW;
-    const badgeY = metaRowTop + 1;
+    const badgeY = metaRowTop;
 
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
-    doc.setTextColor(38, 42, 52);
-    let sub = `${n} fardos · ${wt.toFixed(0)} kg · ${prds} prod. · ${lts} lotes`;
+    doc.setFontSize(10);
+    setText(doc, INK);
+    let sub = `${n} fardos · ${wt.toFixed(0)} kg · ${prds} prod. · ${lts} lotes · ${comp.p} P · ${comp.g} G`;
+    if (comp.unknown > 0) sub += ` · ${comp.unknown} sem tam.`;
     if (isRestante) sub += " · RESTANTE";
-    const subMaxW = badgeX - ix - 4;
+    const subMaxW = badgeX - ix - 6;
     const subLines = doc.splitTextToSize(sub, subMaxW);
     doc.text(subLines, ix, metaRowTop + 6);
 
-    const [ir, ig, ib] = iqRgb(iqMed);
-    doc.setFillColor(ir, ig, ib);
-    doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.4, 1.4, "F");
-    doc.setTextColor(255, 255, 255);
+    const band = iqBand(iqMed);
+    setFill(doc, band.fill);
+    setDraw(doc, band.border);
+    doc.setLineWidth(Math.max(0.4, band.borderW));
+    doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.6, 1.6, "FD");
+    setText(doc, band.text);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text(
+      `IQ ${iqMed.toFixed(0)} · ${band.letter}`,
+      badgeX + badgeW / 2,
+      badgeY + badgeH / 2 + 1.8,
+      { align: "center" },
+    );
+
+    let cy = metaRowTop + Math.max(13, subLines.length * 4.8) + 3;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    setText(doc, INK_MUTE);
+    doc.text("QUALIDADE MÉDIA DA SEQUÊNCIA", ix, cy);
+    cy += 2.5;
+    cy = drawQualityChips(doc, ix, cy, innerW, sp, thresholds);
+
+    // "LAYOUT FÍSICO" + dimensões na MESMA linha (antes ocupava 2 linhas).
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
-    doc.text(`IQ ${iqMed.toFixed(0)}`, badgeX + badgeW / 2, badgeY + badgeH / 2 + 2.2, { align: "center" });
+    setText(doc, INK);
+    doc.text("LAYOUT FÍSICO", ix, cy + 4);
+    const labelW = doc.getTextWidth("LAYOUT FÍSICO");
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    setText(doc, INK_SOFT);
+    doc.text(
+      "  ·  Área útil 45,35 × 2,20 m  ·  Fardo P 1,10 × 0,58 m  ·  Fardo G 1,40 × 0,58 m  ·  movimento do Blendomat →",
+      ix + labelW,
+      cy + 4,
+    );
+    cy += 8;
 
-    cy = metaRowTop + Math.max(metaRowH, subLines.length * 4.2) + 4;
+    // Layout em **três** linhas: cada fardo fica ~3× maior que em A4 paisagem
+    // (escala ≈ 25,9 mm/m). Isso garante que o produtor e o lote caibam
+    // legíveis mesmo nos fardos P/G dispostos transversalmente (largura útil
+    // passa de ~10 mm para ~15 mm).
+    cy = drawLayoutStripWrapped(doc, plan, ix, cy + 3, innerW, 3);
 
-    const gutter = 6;
-    const colW = (innerW - gutter) / 2;
-    const maxN = Math.max(seq.a.length, seq.b.length, 1);
-
-    const labelY = cy;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
-    doc.setTextColor(32, 36, 48);
-    doc.text(`LADO A (${seq.a.length})`, ix + colW / 2, labelY, { align: "center" });
-    doc.text(`LADO B (${seq.b.length})`, ix + colW + gutter + colW / 2, labelY, { align: "center" });
-
-    const yStacks = labelY + 5;
-    const availH = pageH - m - bottomReserve - yStacks;
-    let boxH = (availH - Math.max(0, maxN - 1) * gapV) / maxN;
-    boxH = Math.min(14, Math.max(5, boxH));
-
-    const stackH = maxN > 0 ? maxN * (boxH + gapV) - gapV : 0;
-    const midX = ix + colW + gutter / 2;
-    doc.setDrawColor(90, 98, 120);
-    doc.setLineWidth(0.3);
-    doc.setLineDashPattern([2, 3], 0);
-    doc.line(midX, yStacks, midX, yStacks + stackH);
-    doc.setLineDashPattern([], 0);
-
-    drawBaleColumn(doc, yStacks, ix, colW, seq.a, gapV, boxH);
-    drawBaleColumn(doc, yStacks, ix + colW + gutter, colW, seq.b, gapV, boxH);
+    if (plan.notes.length > 0) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      setText(doc, INK_SOFT);
+      plan.notes.forEach((t) => {
+        const lines = doc.splitTextToSize(`• ${t}`, innerW);
+        if (cy + lines.length * 4 + 8 > pageH - m) return;
+        doc.text(lines, ix, cy + 3);
+        cy += lines.length * 4 + 1;
+      });
+    }
   });
 
   const totalPages = doc.getNumberOfPages();
@@ -489,7 +920,7 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     doc.setPage(pi);
     pageW = doc.internal.pageSize.getWidth();
     pageH = doc.internal.pageSize.getHeight();
-    const hint = pi === 1 ? "Resumo" : "Colunas A|B · ordem vertical cima→baixo";
+    const hint = pi === 1 ? "Resumo" : "Layout físico da sequência · movimento do Blendomat →";
     drawSeqFooter(doc, pageW, pageH, m, pi, totalPages, hint);
   }
 

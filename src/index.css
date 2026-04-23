@@ -1253,6 +1253,345 @@ select {
   margin-bottom: 10px;
 }
 
+/* ── Composition panel (P/G) ── */
+.seq-layout-panel {
+  border: 1px solid var(--bd);
+  background: var(--sf2);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.seq-layout-panel-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.seq-layout-panel-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--tx);
+}
+
+.seq-layout-panel-sub {
+  font-size: 11px;
+  color: var(--tx3);
+  margin-top: 2px;
+}
+
+.seq-layout-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--bd);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.seq-layout-badge--p { color: var(--cy); background: rgba(34, 211, 238, 0.12); border-color: rgba(34, 211, 238, 0.4); }
+.seq-layout-badge--g { color: var(--pp, #a855f7); background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.4); }
+.seq-layout-badge--mix { color: var(--am); background: var(--ambg); border-color: var(--ambd); }
+.seq-layout-badge--unknown { color: var(--tx3); background: var(--sf); border-color: var(--bd); }
+
+.seq-layout-count {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--tx2);
+}
+
+.seq-layout-note {
+  font-size: 12px;
+  color: var(--tx2);
+  line-height: 1.5;
+  padding: 8px 10px;
+  background: var(--sf);
+  border-left: 3px solid var(--cy);
+  border-radius: 0 6px 6px 0;
+  margin-top: 6px;
+}
+.seq-layout-note--warn {
+  border-left-color: var(--am);
+  background: var(--ambg);
+}
+
+/* ── Layout canvas (SVG) ── */
+.seq-layout-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--bd);
+}
+.seq-layout-section-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.seq-layout-swap-hint {
+  margin: 4px 0 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(224, 68, 90, 0.12);
+  border: 1px solid rgba(224, 68, 90, 0.4);
+  color: var(--rd, #e0445a);
+  font-size: 11px;
+  font-weight: 600;
+}
+.seq-layout-section-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--tx2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.seq-layout-section-hint {
+  font-size: 10px;
+  color: var(--tx3);
+  font-style: italic;
+}
+.seq-layout-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Botão de rotação flutuante dentro do fardo selecionado.
+ * Aparece apenas quando o fardo está em estado "is-selected" e permite
+ * alternar transversal ↔ longitudinal sem disparar drag/click do fardo. */
+.seq-layout-rotate {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+  text-shadow: none;
+}
+.seq-layout-rotate:hover {
+  background: var(--am);
+  color: #1c1c1c;
+  border-color: var(--am);
+}
+.seq-layout-wrap {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  background: var(--sf);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 10px 14px 14px;
+}
+
+/* Seta indicando o sentido de movimento */
+.seq-layout-flow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--cy);
+  letter-spacing: 0.3px;
+  min-width: 1600px;
+  margin-bottom: 6px;
+}
+.seq-layout-flow-line {
+  flex: 1;
+  height: 2px;
+  background: linear-gradient(90deg, var(--cy), transparent);
+  opacity: 0.6;
+  border-radius: 2px;
+}
+
+/* Canvas — área de desenho que pode ultrapassar o braço nas pontas */
+.seq-layout-canvas {
+  position: relative;
+  /* Escala dimensionada para caber produtor + lote dentro de um P transversal
+   * (0,58 × 1,10 m). 5600px / 45,35m ≈ 123,5 px/m → P transversal fica
+   * ~72 × 136 px, suficiente para 3 linhas de texto legíveis. */
+  min-width: 5600px;
+  width: 100%;
+  overflow: visible;
+}
+/* Braço útil (2,20 m): retângulo desenhado por dentro do canvas */
+.seq-layout-arm {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--sf2);
+  border: 1.5px solid var(--bd);
+  border-radius: 4px;
+  pointer-events: none;
+}
+.seq-layout-midline {
+  position: absolute;
+  left: 0; right: 0;
+  height: 0;
+  border-top: 1px dashed var(--bd);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.seq-layout-width-lbl {
+  position: absolute;
+  left: 6px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--tx3);
+  background: rgba(0, 0, 0, 0.35);
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+  font-family: "JetBrains Mono", monospace;
+  z-index: 2;
+}
+
+/* Fardo físico (div absoluto, proporcional) */
+.seq-layout-bale {
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 3px;
+  color: #fff;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.05;
+  overflow: hidden;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  transition: transform 0.1s ease, box-shadow 0.1s ease, opacity 0.1s;
+  gap: 1px;
+  padding: 3px 4px;
+  box-sizing: border-box;
+  user-select: none;
+  z-index: 2;
+  text-align: center;
+}
+.seq-layout-bale:hover {
+  box-shadow: 0 0 0 2px #fff inset, 0 4px 10px rgba(0, 0, 0, 0.45);
+  z-index: 3;
+  cursor: grab;
+}
+.seq-layout-bale.is-selected {
+  box-shadow: 0 0 0 2.5px var(--am) inset;
+  z-index: 4;
+}
+.seq-layout-bale.is-faded {
+  opacity: 0.18;
+}
+.seq-layout-bale.is-drag-over {
+  box-shadow: 0 0 0 3px var(--cy) inset;
+  z-index: 5;
+}
+.seq-layout-bale.is-drag-over--blocked {
+  box-shadow: 0 0 0 3px var(--rd, #e0445a) inset;
+  cursor: not-allowed;
+  z-index: 5;
+}
+.seq-layout-bale.is-drag-over--blocked::after {
+  content: "🚫";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 18px;
+  pointer-events: none;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.7);
+}
+.seq-layout-bale:active {
+  cursor: grabbing;
+}
+
+/* Hierarquia de informação dentro do fardo:
+ * 1. Produtor (maior, destaque)
+ * 2. Lote (médio)
+ * 3. Tamanho · IQ (pequeno, auxiliar)
+ * Dimensionada para caber dentro de um P transversal (0,58 × 1,10 m). */
+.seq-layout-bale-prod {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1px;
+  max-width: 100%;
+  padding: 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.seq-layout-bale-lote {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.95;
+  max-width: 100%;
+  padding: 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.seq-layout-bale-meta {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  opacity: 0.78;
+  max-width: 100%;
+  padding: 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Eixo X (ticks de metragem) */
+.seq-layout-axis {
+  position: relative;
+  min-width: 5600px;
+  height: 18px;
+  margin-top: 2px;
+}
+.seq-layout-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.seq-layout-tick-mark {
+  width: 1px;
+  height: 4px;
+  background: var(--bd);
+}
+.seq-layout-tick-lbl {
+  font-size: 9px;
+  color: var(--tx3);
+  font-family: "JetBrains Mono", monospace;
+  margin-top: 2px;
+}
+
+.seq-layout-notes {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--tx3);
+  line-height: 1.5;
+}
+.seq-layout-notes li { margin-bottom: 2px; }
+
 .mx-item.cost {
   border-color: rgba(34, 211, 238, 0.3);
   background: rgba(34, 211, 238, 0.06);
@@ -1444,15 +1783,20 @@ ul.rules-list li { margin-bottom: 6px; }
 }
 
 /* ── Solver results badge (PageStep3) ── */
-/* Step 3: gauge + KPI cards — keep 2 columns; badge stacks above .mx in right column */
+/* Step 3: custo (opcional) + KPIs numa linha (scroll horizontal se necessário) */
 .step3-kpi-grid {
   display: grid;
-  grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
   align-items: start;
+  gap: 14px;
 }
 
 .step3-kpi-grid--cost {
-  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+}
+
+.step3-kpi-grid--full {
+  grid-template-columns: 1fr;
 }
 
 .step3-kpis-col {
@@ -1460,6 +1804,85 @@ ul.rules-list li { margin-bottom: 6px; }
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* Parâmetros da mistura na mesma linha; rolagem em telas estreitas */
+.step3-kpis-col .mx.step3-mx-nowrap {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.step3-kpis-col .mx.step3-mx-nowrap .mx-item {
+  flex: 0 0 auto;
+  min-width: 120px;
+  max-width: 155px;
+}
+
+/* Resumo e barra de produtores (abaixo do título) */
+.step3-title-meta {
+  margin-top: 10px;
+  max-width: min(720px, 100%);
+}
+
+.step3-title-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 12px;
+  color: var(--tx2);
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.step3-title-stats__sep {
+  color: var(--tx3);
+  opacity: 0.75;
+  user-select: none;
+}
+
+.step3-title-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.step3-title-stat .v {
+  font-weight: 700;
+  color: var(--tx);
+  font-variant-numeric: tabular-nums;
+}
+
+.step3-producer-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.step3-producer-strip__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tx2);
+}
+
+.step3-producer-strip .prog {
+  margin: 0;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sf3);
+}
+
+.step3-producer-strip .prog-f {
+  border-radius: 999px;
 }
 
 .solver-result-badge {
@@ -1583,15 +2006,178 @@ ul.rules-list li { margin-bottom: 6px; }
   margin-top: 8px;
 }
 
+/* Step 1 — overview & producer filter */
+.stock-ov-wrap {
+  margin-bottom: 20px;
+}
+
+.stock-ov-head {
+  margin-bottom: 12px;
+}
+
+.stock-ov-body {
+  display: grid;
+  grid-template-columns: minmax(280px, 28%) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1024px) {
+  .stock-ov-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.stock-ov-bins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.stock-ov-card {
+  background: var(--sf2);
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.stock-ov-card--supplier {
+  position: sticky;
+  top: 8px;
+}
+
+.stock-ov-card-h {
+  background: linear-gradient(180deg, #1e3a5f 0%, #152a45 100%);
+  color: #f0f4fa;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--bd);
+}
+
+.stock-ov-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  table-layout: fixed;
+}
+
+.stock-ov-tbl th,
+.stock-ov-tbl td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--bd);
+  text-align: right;
+  vertical-align: middle;
+}
+
+.stock-ov-tbl-faixa {
+  text-align: left !important;
+  width: 40%;
+  min-width: 0;
+}
+
+.stock-ov-tbl-num {
+  width: 17%;
+  min-width: 3.2rem;
+  white-space: nowrap;
+}
+
+.stock-ov-tbl-pct {
+  width: 16%;
+  min-width: 3.5rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.stock-ov-tbl th {
+  background: var(--sf3);
+  color: var(--tx3);
+  font-weight: 700;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.stock-ov-tbl tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.ov-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prod-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.prod-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--bd);
+  background: var(--sf2);
+  color: var(--tx2);
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 100%;
+}
+
+.prod-filter-chip--on {
+  border-color: var(--cybd);
+  background: var(--cybg);
+  color: var(--cy);
+}
+
+.prod-filter-chip--off {
+  opacity: 0.45;
+}
+
+.prod-filter-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.prod-filter-meta {
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+.row-mix-off {
+  opacity: 0.55;
+}
+
+.row-hvi-pending {
+  opacity: 0.65;
+}
+
+.row-hvi-pending .mono {
+  color: var(--tx3);
+}
+
 @media (max-width: 900px) {
   .solver-options { grid-template-columns: 1fr; }
 
   .step3-kpi-grid,
-  .step3-kpi-grid--cost {
+  .step3-kpi-grid--cost,
+  .step3-kpi-grid--full {
     grid-template-columns: 1fr;
   }
 
-  .mx {
+  .mx:not(.step3-mx-nowrap) {
     grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   }
 }

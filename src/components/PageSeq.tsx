@@ -7,17 +7,251 @@ import {
   fmtBRL,
   iqColor,
   seqParamOk,
+  buildLayoutPlan,
+  summarizeComposition,
   type SeqSide,
   type SeqBale,
+  type LayoutPlan,
+  type LayoutPlacement,
 } from "../engine/sequencer";
-import { fmtParam } from "../utils/paramFormat";
+import { BALE_P_LENGTH_M, BALE_G_LENGTH_M } from "../domain/stock";
 import { buildSeqPDF } from "../utils/pdf";
+
+/**
+ * Regras de troca de fardos (operacionais):
+ *   • P ↔ P e G ↔ G: liberadas em qualquer orientação.
+ *   • P ↔ G: aceita **apenas** quando ambos os slots estão na orientação
+ *     longitudinal (largura > altura). Nessa orientação P (1,10 m) e G
+ *     (1,40 m) compartilham a mesma altura (0,58 m), então a operação só
+ *     muda a largura do slot — não cria um fardo "deitado" sem cabimento.
+ *   • Em qualquer outra combinação P↔G a troca é bloqueada (manter um G
+ *     em slot de P transversal ou vice-versa quebraria a área útil).
+ */
+function isLongitudinal(p: LayoutPlacement): boolean {
+  return p.w > p.h + 1e-6;
+}
+
+function canSwapPlacements(p1: LayoutPlacement, p2: LayoutPlacement): boolean {
+  const t1 = p1.bale.tamanho ?? p1.tamanho;
+  const t2 = p2.bale.tamanho ?? p2.tamanho;
+  if (t1 === t2) return true;
+  return isLongitudinal(p1) && isLongitudinal(p2);
+}
+
+/**
+ * Dois slots estão no mesmo "trilho" quando compartilham o mesmo topo (Y)
+ * e a mesma altura (H) — i.e., uma linha horizontal contígua do layout
+ * (ex.: o lane longitudinal, a linha de topo de G transversais, a linha
+ * de topo de P-par etc.). Endcaps ficam cada um em seu próprio trilho
+ * (têm Y diferente para cada nível da pilha).
+ */
+function sameRow(a: LayoutPlacement, b: LayoutPlacement): boolean {
+  return Math.abs(a.y - b.y) < 1e-3 && Math.abs(a.h - b.h) < 1e-3;
+}
+
+/**
+ * Re-empacota o trilho que contém o slot `pivotIdx`: ordena todos os
+ * slots do mesmo trilho por X, fixa o X do slot mais à esquerda e
+ * encosta os demais lado a lado usando suas larguras atuais. Assim,
+ * uma troca P long ↔ G long "empurra" (ou "puxa") os vizinhos evitando
+ * sobreposição ou buracos.
+ */
+function repackRowContaining(placements: LayoutPlacement[], pivotIdx: number): void {
+  const pivot = placements[pivotIdx];
+  if (!pivot) return;
+  const rowIdx = placements
+    .map((p, idx) => ({ p, idx }))
+    .filter(({ p }) => sameRow(p, pivot));
+  if (rowIdx.length <= 1) return;
+  rowIdx.sort((a, b) => a.p.x - b.p.x);
+  let cursor = rowIdx[0].p.x;
+  for (const { idx } of rowIdx) {
+    placements[idx] = { ...placements[idx], x: cursor };
+    cursor += placements[idx].w;
+  }
+}
+
+const LAYOUT_DIMS_TEXT = {
+  area: "45,35 × 2,20 m",
+};
 
 function iqLabel(iq: number): string {
   if (iq >= 75) return "Excelente";
   if (iq >= 55) return "Bom";
   if (iq >= 35) return "Regular";
   return "Fraco";
+}
+
+interface LayoutCanvasProps {
+  plan: LayoutPlan;
+  si: number;
+  highlightProducer: string | null;
+  selectedKey: string | null;
+  onSelect: (side: "a" | "b", bi: number) => void;
+  onDragStart: (si: number, side: "a" | "b", bi: number) => void;
+  onDrop: (si: number, side: "a" | "b", bi: number) => void;
+  onDragEnd: () => void;
+  onRotate: (si: number, side: "a" | "b", bi: number) => void;
+  /**
+   * Decide visualmente se o slot de destino aceita o fardo arrastado.
+   * Retorna `true` quando válido (highlight verde), `false` quando
+   * bloqueado (highlight vermelho). `null` quando não há arrasto ativo.
+   */
+  canDropOn: (dstSi: number, dstSide: "a" | "b", dstBi: number) => boolean | null;
+}
+
+function compositionBadgeClass(mode: LayoutPlan["composition"]["mode"]): string {
+  if (mode === "p_only") return "seq-layout-badge seq-layout-badge--p";
+  if (mode === "g_only") return "seq-layout-badge seq-layout-badge--g";
+  if (mode === "mixed") return "seq-layout-badge seq-layout-badge--mix";
+  return "seq-layout-badge seq-layout-badge--unknown";
+}
+
+/**
+ * Desenha a área útil do Blendomat (45,35 × 2,20 m) proporcionalmente
+ * usando HTML absoluto: cada fardo vira um div com tamanho/posição em %,
+ * mantendo a escala real entre fardos e área. Os divs são arrastáveis
+ * (mesma API do painel de sequência), permitindo reordenar/trocar fardos
+ * diretamente no layout físico.
+ */
+function LayoutCanvas({
+  plan,
+  si,
+  highlightProducer,
+  selectedKey,
+  onSelect,
+  onDragStart,
+  onDrop,
+  onDragEnd,
+  onRotate,
+  canDropOn,
+}: LayoutCanvasProps) {
+  const { areaLength, areaWidth, canvasHeight, armYOffset } = plan;
+
+  const xTicks: number[] = [];
+  for (let x = 0; x <= areaLength + 0.001; x += 5) xTicks.push(+x.toFixed(2));
+  if (xTicks[xTicks.length - 1] !== areaLength) xTicks.push(areaLength);
+
+  const armTopPct = (armYOffset / canvasHeight) * 100;
+  const armHeightPct = (areaWidth / canvasHeight) * 100;
+  const armMidPct = ((armYOffset + areaWidth / 2) / canvasHeight) * 100;
+
+  return (
+    <div className="seq-layout-wrap">
+      <div className="seq-layout-flow">
+        <span>▸ Sentido de movimento do Blendomat</span>
+        <div className="seq-layout-flow-line" />
+      </div>
+
+      <div
+        className="seq-layout-canvas"
+        style={{ aspectRatio: `${areaLength} / ${canvasHeight}` }}
+        aria-label={`Disposição física dos fardos da sequência ${si + 1}`}
+      >
+        <div
+          className="seq-layout-arm"
+          style={{ top: `${armTopPct}%`, height: `${armHeightPct}%` }}
+          aria-hidden="true"
+        />
+        <div
+          className="seq-layout-midline"
+          style={{ top: `${armMidPct}%` }}
+          aria-hidden="true"
+        />
+        <span className="seq-layout-width-lbl" style={{ top: `${armMidPct}%` }}>
+          {areaWidth.toFixed(2)} m
+        </span>
+
+        {plan.placements.map((p, i) => {
+          const keyStr = `${p.side}:${p.bi}`;
+          const leftPct = (p.x / areaLength) * 100;
+          const topPct = (p.y / canvasHeight) * 100;
+          const wPct = (p.w / areaLength) * 100;
+          const hPct = (p.h / canvasHeight) * 100;
+          const isHidden = !!highlightProducer && p.bale.produtor !== highlightProducer;
+          const isSelected = selectedKey === keyStr;
+          const title =
+            `${p.bale.lote} — ${p.bale.produtor}\n` +
+            `Tamanho: ${p.tamanho}${p.note ? "\n" + p.note : ""}\n` +
+            `IQ: ${p.bale.iq.toFixed(0)}`;
+          const isLong = p.w > p.h;
+          return (
+            <div
+              key={`pl-${i}-${keyStr}`}
+              className={[
+                "seq-layout-bale",
+                `seq-layout-bale--${p.tamanho}`,
+                isLong ? "is-long" : "is-trans",
+                isSelected ? "is-selected" : "",
+                isHidden ? "is-faded" : "",
+              ].filter(Boolean).join(" ")}
+              style={{
+                left: `${leftPct}%`,
+                top: `${topPct}%`,
+                width: `${wPct}%`,
+                height: `${hPct}%`,
+                background: iqColor(p.bale.iq),
+              }}
+              title={title}
+              draggable
+              onDragStart={() => onDragStart(si, p.side, p.bi)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                const verdict = canDropOn(si, p.side, p.bi);
+                e.currentTarget.classList.remove("is-drag-over", "is-drag-over--blocked");
+                if (verdict === false) {
+                  e.currentTarget.classList.add("is-drag-over--blocked");
+                  e.dataTransfer.dropEffect = "none";
+                } else {
+                  e.currentTarget.classList.add("is-drag-over");
+                }
+              }}
+              onDragLeave={(e) => e.currentTarget.classList.remove("is-drag-over", "is-drag-over--blocked")}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove("is-drag-over", "is-drag-over--blocked");
+                onDrop(si, p.side, p.bi);
+              }}
+              onDragEnd={onDragEnd}
+              onClick={() => onSelect(p.side, p.bi)}
+            >
+              <span className="seq-layout-bale-prod">{p.bale.produtor}</span>
+              <span className="seq-layout-bale-lote">{p.bale.lote}</span>
+              <span className="seq-layout-bale-meta">{p.tamanho} · IQ {p.bale.iq.toFixed(0)}</span>
+              {isSelected && (
+                <button
+                  type="button"
+                  className="seq-layout-rotate"
+                  title="Girar 90° (transversal ↔ longitudinal)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRotate(si, p.side, p.bi);
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  draggable={false}
+                >
+                  ⟳
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="seq-layout-axis">
+        {xTicks.map((t, i) => {
+          const pct = (t / areaLength) * 100;
+          const label = t === areaLength ? `${t.toFixed(2)} m` : `${t.toFixed(0)} m`;
+          return (
+            <div key={`xt-${i}`} className="seq-layout-tick" style={{ left: `${pct}%` }}>
+              <div className="seq-layout-tick-mark" />
+              <span className="seq-layout-tick-lbl">{label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function PageSeq() {
@@ -35,11 +269,26 @@ export function PageSeq() {
   const [isOdd, setIsOdd] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [selected, setSelected] = useState<{ si: number; side: "a" | "b"; bi: number } | null>(null);
+  const [swapHint, setSwapHint] = useState<string | null>(null);
   const [generated, setGenerated] = useState(false);
+  /**
+   * `layoutPlans` é fonte de verdade da posição visual dos fardos. É
+   * gerado por `buildLayoutPlan` na primeira carga / no botão "Gerar
+   * Sequências" e em seguida passa a ser editado **diretamente** pelas
+   * ações do usuário (swap por arrasto, rotação 90°, swap pelo painel).
+   * Isto permite que a edição manual persista, já que reconstruir o plano
+   * a partir das `sequences` reaplicaria a ordenação por IQ do engine e
+   * apagaria as escolhas do operador.
+   */
+  const [layoutPlans, setLayoutPlans] = useState<LayoutPlan[]>([]);
 
   const dragSrc = useRef<{ si: number; side: "a" | "b"; bi: number } | null>(null);
 
   const h = seqHistRecord;
+
+  const regeneratePlans = useCallback((seqs: SeqSide[]) => {
+    setLayoutPlans(seqs.map((s) => buildLayoutPlan(s)));
+  }, []);
 
   const doGenerate = useCallback(() => {
     if (!h) return;
@@ -49,6 +298,7 @@ export function PageSeq() {
     const result = generateSequences(data, seqWeight, minProds, thresholds);
 
     setSequences(result.sequences);
+    regeneratePlans(result.sequences);
     setBaleWtKg(result.baleWtKg);
     setBps(result.bps);
     setNSeq(result.nSeq);
@@ -58,7 +308,7 @@ export function PageSeq() {
     setIsOdd(result.isOdd);
     setSelected(null);
     setGenerated(true);
-  }, [h, seqWeight, minProds, thresholds]);
+  }, [h, seqWeight, minProds, thresholds, regeneratePlans]);
 
   // Auto-generate on mount
   useEffect(() => {
@@ -67,34 +317,145 @@ export function PageSeq() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * Troca dois fardos atualizando **ambos** os estados:
+   *   • `sequences` — para que parâmetros (IQ, peso, custo) recalculem
+   *     corretamente em cada sequência.
+   *   • `layoutPlans` — troca os refs `bale` / `side` / `bi` nos slots,
+   *     preservando posição/orientação dos slots. Assim o usuário vê o
+   *     fardo realmente migrar para o slot de destino.
+   */
   const swapBales = (si1: number, side1: "a" | "b", bi1: number, si2: number, side2: "a" | "b", bi2: number) => {
+    if (si1 === si2 && side1 === side2 && bi1 === bi2) return;
+
+    // Validação operacional: respeita as regras de tamanho/orientação dos slots
+    // (ver `canSwapPlacements`). Sem os planos carregados (caso raro), libera
+    // a troca para preservar o comportamento histórico do painel.
+    const findPlacement = (sIdx: number, side: "a" | "b", bi: number) =>
+      layoutPlans[sIdx]?.placements.find((p) => p.side === side && p.bi === bi) ?? null;
+    const pl1 = findPlacement(si1, side1, bi1);
+    const pl2 = findPlacement(si2, side2, bi2);
+    if (pl1 && pl2 && !canSwapPlacements(pl1, pl2)) {
+      setSwapHint(`Troca bloqueada — só é possível trocar P por G se ambos estiverem em orientação longitudinal.`);
+      return;
+    }
+
     const newSeqs = sequences.map(s => ({ a: [...s.a], b: [...s.b] }));
     const tmp = newSeqs[si1][side1][bi1];
     newSeqs[si1][side1][bi1] = newSeqs[si2][side2][bi2];
     newSeqs[si2][side2][bi2] = tmp;
     setSequences(newSeqs);
+
+    setLayoutPlans(prev => {
+      const next = prev.map(plan => ({ ...plan, placements: plan.placements.map(p => ({ ...p })) }));
+      const findIdx = (sIdx: number, side: "a" | "b", bi: number) =>
+        next[sIdx]?.placements.findIndex(p => p.side === side && p.bi === bi) ?? -1;
+      const i1 = findIdx(si1, side1, bi1);
+      const i2 = findIdx(si2, side2, bi2);
+      if (i1 < 0 || i2 < 0) return next;
+      const p1 = next[si1].placements[i1];
+      const p2 = next[si2].placements[i2];
+      // Mantém o slot quando o fardo recebido tem o mesmo tamanho do antigo.
+      // Quando troca P long ↔ G long, o slot adota as dimensões naturais do
+      // novo fardo (P long = 1,10 / G long = 1,40 m) e o trilho (mesma
+      // linha Y/H) é re-empacotado lado a lado para evitar sobreposição
+      // ou gap — o fardo trocado "empurra" ou "puxa" os vizinhos.
+      const t1 = p1.bale.tamanho ?? p1.tamanho;
+      const t2 = p2.bale.tamanho ?? p2.tamanho;
+      const sameSize = t1 === t2;
+      const longWidthFor = (sz: typeof p1.tamanho) => (sz === "G" ? BALE_G_LENGTH_M : BALE_P_LENGTH_M);
+      next[si1].placements[i1] = sameSize
+        ? { ...p1, bale: p2.bale }
+        : { ...p1, bale: p2.bale, tamanho: t2, w: longWidthFor(t2) };
+      next[si2].placements[i2] = sameSize
+        ? { ...p2, bale: p1.bale }
+        : { ...p2, bale: p1.bale, tamanho: t1, w: longWidthFor(t1) };
+
+      // Re-empacota o(s) trilho(s) afetado(s) se a troca mudou larguras.
+      if (!sameSize) {
+        repackRowContaining(next[si1].placements, i1);
+        if (si1 !== si2) repackRowContaining(next[si2].placements, i2);
+        else if (!sameRow(next[si1].placements[i1], next[si1].placements[i2])) {
+          repackRowContaining(next[si1].placements, i2);
+        }
+      }
+      return next;
+    });
+
     setSelected(null);
+    setSwapHint(null);
+  };
+
+  /**
+   * Rotaciona em 90° o fardo do slot informado: troca w↔h, mantendo o
+   * canto superior-esquerdo (x, y). Permite ao operador alternar
+   * transversal ↔ longitudinal para acomodar a operação.
+   */
+  const rotateBale = (si: number, side: "a" | "b", bi: number) => {
+    setLayoutPlans(prev => prev.map((plan, idx) => {
+      if (idx !== si) return plan;
+      return {
+        ...plan,
+        placements: plan.placements.map(p => {
+          if (p.side !== side || p.bi !== bi) return p;
+          const newW = p.h;
+          const newH = p.w;
+          // Não deixa o fardo ultrapassar a área útil em X após rotacionar.
+          const newX = Math.min(p.x, plan.areaLength - newW);
+          return {
+            ...p,
+            x: Math.max(0, newX),
+            w: newW,
+            h: newH,
+            note: (p.note ? p.note + " · " : "") + "rotacionado",
+          };
+        }),
+      };
+    }));
   };
 
   const handleDragStart = (si: number, side: "a" | "b", bi: number) => {
     dragSrc.current = { si, side, bi };
   };
 
+  /**
+   * Drag-and-drop sempre realiza uma troca direta — origem ⇄ destino —
+   * mesmo que ambos estejam no mesmo lado da mesma sequência. Como o
+   * layout é editado in-place em `layoutPlans`, o efeito visual é imediato
+   * e simétrico ao painel "Trocar com…".
+   */
   const handleDrop = (si: number, side: "a" | "b", bi: number) => {
     const src = dragSrc.current;
-    if (!src) return;
-
-    if (src.si === si && src.side === side && src.bi !== bi) {
-      const newSeqs = sequences.map(s => ({ a: [...s.a], b: [...s.b] }));
-      const arr = newSeqs[si][side];
-      const [moved] = arr.splice(src.bi, 1);
-      arr.splice(bi, 0, moved);
-      setSequences(newSeqs);
-    } else if (src.si !== si || src.side !== side) {
-      swapBales(src.si, src.side, src.bi, si, side, bi);
+    if (!src) {
+      return;
     }
+    swapBales(src.si, src.side, src.bi, si, side, bi);
     dragSrc.current = null;
   };
+
+  /**
+   * Restaura o layout a partir das `sequences` correntes, descartando
+   * trocas e rotações manuais. Útil quando o operador quer voltar ao
+   * arranjo automático recomendado.
+   */
+  const resetLayout = () => {
+    regeneratePlans(sequences);
+    setSelected(null);
+    setSwapHint(null);
+  };
+
+  // Aviso de troca bloqueada some sozinho após alguns segundos para não
+  // poluir o painel quando o operador continuar trabalhando.
+  useEffect(() => {
+    if (!swapHint) return;
+    const t = window.setTimeout(() => setSwapHint(null), 3500);
+    return () => window.clearTimeout(t);
+  }, [swapHint]);
+
+  const overallComposition = useMemo(() => {
+    const all = sequences.flatMap((s) => [...s.a, ...s.b]);
+    return summarizeComposition(all);
+  }, [sequences]);
 
   const legendEntries = useMemo(() => {
     if (!h) return [] as { prod: string; lots: string[] }[];
@@ -143,42 +504,6 @@ export function PageSeq() {
       totalBales,
     });
     doc.save(`${(h.name || "sequencias").replace(/\s+/g, "_")}_sequencias.pdf`);
-  };
-
-  const renderBale = (b: SeqBale, si: number, side: "a" | "b", bi: number) => {
-    const bg = iqColor(b.iq);
-    const hl = highlight && b.produtor !== highlight ? 0.12 : 1;
-    const hb = highlight && b.produtor === highlight;
-    const isSel = selected && selected.si === si && selected.side === side && selected.bi === bi;
-
-    return (
-      <div
-        key={`${si}-${side}-${bi}`}
-        className={`seq-bale${isSel ? " selected" : ""}`}
-        style={{
-          background: bg,
-          opacity: hl,
-          boxShadow: hb ? "0 0 0 2px #fff inset" : isSel ? "0 0 0 3px var(--am)" : undefined,
-        }}
-        draggable
-        title={`${b.lote} — ${b.produtor}\nIQ: ${b.iq.toFixed(0)} (${iqLabel(b.iq)})\nUHML (mm): ${fmtParam("uhml", b.uhml)} · STR: ${fmtParam("str_val", b.str_val)} · ELG: ${fmtParam("elg", b.elg)}\nUI: ${fmtParam("ui", b.ui)} · MIC: ${fmtParam("mic", b.mic)} · SF: ${fmtParam("sf", b.sf)}\nR$${b.custo}/ton`}
-        onClick={() => {
-          if (isSel) setSelected(null);
-          else setSelected({ si, side, bi });
-        }}
-        onDragStart={() => handleDragStart(si, side, bi)}
-        onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("drag-over"); }}
-        onDragLeave={(e) => e.currentTarget.classList.remove("drag-over")}
-        onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove("drag-over"); handleDrop(si, side, bi); }}
-        onDragEnd={() => { dragSrc.current = null; }}
-      >
-        <div className="seq-bale-lote">
-          <span className="seq-bale-lote-id">{b.lote}</span>
-          <span className="seq-bale-prod">{b.produtor}</span>
-        </div>
-        <div className="seq-bale-info">{b.iq.toFixed(0)}</div>
-      </div>
-    );
   };
 
   return (
@@ -236,6 +561,53 @@ export function PageSeq() {
               ))}
             </div>
 
+            {(() => {
+              const c = overallComposition;
+              const modeText =
+                c.mode === "p_only"
+                  ? "Apenas fardos P"
+                  : c.mode === "g_only"
+                    ? "Apenas fardos G"
+                    : c.mode === "mixed"
+                      ? "Mistura P + G"
+                      : "Tamanho não informado";
+              const cls = compositionBadgeClass(c.mode);
+              return (
+                <div className="seq-layout-panel">
+                  <div className="seq-layout-panel-hdr">
+                    <div>
+                      <div className="seq-layout-panel-title">Disposição física dos fardos</div>
+                      <div className="seq-layout-panel-sub">
+                        Área útil: <strong>{LAYOUT_DIMS_TEXT.area}</strong> · Fardo P:{" "}
+                        <strong>1,10 × 0,58 m</strong> · Fardo G: <strong>1,40 × 0,58 m</strong>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <span className={cls}>{modeText}</span>
+                      <span className="seq-layout-count">{c.p} P · {c.g} G{c.unknown > 0 ? ` · ${c.unknown} sem tam.` : ""}</span>
+                    </div>
+                  </div>
+                  {c.mode === "p_only" && (
+                    <div className="seq-layout-note">
+                      ✔ Apenas fardos P — dispostos <strong>transversalmente</strong> (1,10 m em Y), duas fileiras empilhadas
+                      preenchem exatamente a largura do braço (2,20 m).
+                    </div>
+                  )}
+                  {c.mode === "g_only" && (
+                    <div className="seq-layout-note">
+                      ✔ Todos os fardos são G — disposição longitudinal convencional em duas fileiras.
+                    </div>
+                  )}
+                  {c.mode === "unknown" && (
+                    <div className="seq-layout-note seq-layout-note--warn">
+                      ⚠ Nenhum lote informou o tamanho do fardo (P/G). Inclua a coluna <strong>TAMANHO</strong> no CSV de estoque
+                      (valores P ou G) para habilitar a recomendação real. A visualização assume P como padrão.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             <div className="seq-legend">
               {legendEntries.map(({ prod: p, lots: ls }) => {
                 const act = highlight === p;
@@ -276,11 +648,22 @@ export function PageSeq() {
 
         const swapOpen = selected && selected.si === si;
         const candidates: { b: SeqBale; si: number; side: "a" | "b"; bi: number }[] = [];
-        if (swapOpen) {
+        if (swapOpen && selected) {
+          // O slot de origem precisa estar carregado para validar candidatos
+          // segundo `canSwapPlacements` (regra P↔G só na longitudinal).
+          const srcPlacement = layoutPlans[selected.si]?.placements.find(
+            (p) => p.side === selected.side && p.bi === selected.bi,
+          ) ?? null;
           sequences.forEach((s2, si2) => {
             if (si2 === si) return;
-            s2.a.forEach((b, bi2) => candidates.push({ b, si: si2, side: "a", bi: bi2 }));
-            s2.b.forEach((b, bi2) => candidates.push({ b, si: si2, side: "b", bi: bi2 }));
+            const plan2 = layoutPlans[si2];
+            const checkAndPush = (b: SeqBale, side: "a" | "b", bi2: number) => {
+              const dstPlacement = plan2?.placements.find((p) => p.side === side && p.bi === bi2) ?? null;
+              if (srcPlacement && dstPlacement && !canSwapPlacements(srcPlacement, dstPlacement)) return;
+              candidates.push({ b, si: si2, side, bi: bi2 });
+            };
+            s2.a.forEach((b, bi2) => checkAndPush(b, "a", bi2));
+            s2.b.forEach((b, bi2) => checkAndPush(b, "b", bi2));
           });
           candidates.sort((a, b) => b.b.iq - a.b.iq);
         }
@@ -303,15 +686,64 @@ export function PageSeq() {
               </div>
             </div>
 
-            <div className="seq-side">
-              <div className="seq-side-label">▲ Lado A ({seq.a.length})</div>
-              <div className="seq-bales">{seq.a.map((b, bi) => renderBale(b, si, "a", bi))}</div>
-            </div>
-            <div className="seq-divider" />
-            <div className="seq-side">
-              <div className="seq-side-label">▼ Lado B ({seq.b.length})</div>
-              <div className="seq-bales">{seq.b.map((b, bi) => renderBale(b, si, "b", bi))}</div>
-            </div>
+            {layoutPlans[si] && (
+              <div className="seq-layout-section">
+                <div className="seq-layout-section-hdr">
+                  <span className="seq-layout-section-title">Layout físico</span>
+                  <div className="seq-layout-section-actions">
+                    <span className="seq-layout-section-hint">
+                      Arrastar = trocar fardos · Clicar = selecionar (⟳ gira 90°)
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-s btn-sm"
+                      onClick={resetLayout}
+                      title="Recalcula o layout automático para esta e demais sequências"
+                    >
+                      ↺ Resetar layout
+                    </button>
+                  </div>
+                </div>
+                {swapHint && (
+                  <div className="seq-layout-swap-hint" role="status" aria-live="polite">
+                    ⚠ {swapHint}
+                  </div>
+                )}
+                <LayoutCanvas
+                  plan={layoutPlans[si]}
+                  si={si}
+                  highlightProducer={highlight}
+                  selectedKey={selected && selected.si === si ? `${selected.side}:${selected.bi}` : null}
+                  onSelect={(side, bi) => {
+                    if (selected && selected.si === si && selected.side === side && selected.bi === bi) {
+                      setSelected(null);
+                    } else {
+                      setSelected({ si, side, bi });
+                    }
+                  }}
+                  onDragStart={handleDragStart}
+                  onDrop={handleDrop}
+                  onDragEnd={() => { dragSrc.current = null; }}
+                  onRotate={rotateBale}
+                  canDropOn={(dstSi, dstSide, dstBi) => {
+                    const src = dragSrc.current;
+                    if (!src) return null;
+                    const sp = layoutPlans[src.si]?.placements.find((p) => p.side === src.side && p.bi === src.bi);
+                    const dp = layoutPlans[dstSi]?.placements.find((p) => p.side === dstSide && p.bi === dstBi);
+                    if (!sp || !dp) return null;
+                    if (src.si === dstSi && src.side === dstSide && src.bi === dstBi) return null;
+                    return canSwapPlacements(sp, dp);
+                  }}
+                />
+                {layoutPlans[si].notes.length > 0 && (
+                  <ul className="seq-layout-notes">
+                    {layoutPlans[si].notes.map((t, ni) => (
+                      <li key={ni}>{t}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
 
             {swapOpen && selected && (
               <div className="seq-swap open">

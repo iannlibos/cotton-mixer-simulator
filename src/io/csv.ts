@@ -1,6 +1,6 @@
 import Papa from "papaparse";
 import { PARAMS } from "../domain/types.js";
-import type { Lot } from "../domain/stock.js";
+import type { BaleSize, Lot } from "../domain/stock.js";
 import { roundParam } from "../utils/paramFormat.js";
 
 /** Chaves usadas em getField / ALIASES para cada parâmetro de qualidade. */
@@ -42,7 +42,17 @@ const ALIASES: Record<string, string[]> = {
   ELG: ["ELG"],
   MAT: ["MAT"],
   SF: ["SF"],
+  TAMANHO: ["TAMANHO", "TAM", "SIZE", "TAMANHO_FARDO", "BALE_SIZE", "TIPO_FARDO"],
 };
+
+function parseBaleSize(value: unknown): BaleSize | null {
+  if (value == null) return null;
+  const raw = String(value).trim().toUpperCase();
+  if (!raw) return null;
+  if (raw === "P" || raw.startsWith("PEQ")) return "P";
+  if (raw === "G" || raw.startsWith("GRA")) return "G";
+  return null;
+}
 
 function normalizeHeader(input: string): string {
   return String(input || "")
@@ -189,6 +199,7 @@ export function parseStockRows(rows: Record<string, unknown>[]): ParseResult {
     }
 
     const mstRaw = parseNumber(getField(row, "MST", hmap));
+    const tamanho = parseBaleSize(getField(row, "TAMANHO", hmap));
     const lot: Lot = {
       id: idx,
       produtor,
@@ -206,6 +217,7 @@ export function parseStockRows(rows: Record<string, unknown>[]): ParseResult {
       elg: roundParam("elg", parseNumber(getField(row, "ELG", hmap)) || 0),
       mat: roundParam("mat", parseNumber(getField(row, "MAT", hmap)) || 0),
       mst: roundParam("mst", mstRaw != null && Number.isFinite(mstRaw) ? mstRaw : 0),
+      tamanho,
       hviComplete,
     };
 

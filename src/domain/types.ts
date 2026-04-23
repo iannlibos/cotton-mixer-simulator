@@ -61,6 +61,18 @@ export const TARGET_TOL: Record<string, number> = {
 
 export type Thresholds = Record<string, { min: number; max: number }>;
 
+/** Arredonda limites ao número de casas decimais do parâmetro (evita floats longos na UI e no storage). */
+export function roundParamLimit(n: number, prec: number): number {
+  const f = 10 ** prec;
+  return Math.round(n * f) / f;
+}
+
+/** Exibição estável dos limites (sem cauda de precisão binária). */
+export function formatParamLimit(n: number, prec: number): string {
+  if (!Number.isFinite(n)) return "";
+  return String(roundParamLimit(n, prec));
+}
+
 export function buildDefaultThresholds(): Thresholds {
   const out: Thresholds = {};
   PARAMS.forEach((p) => {
@@ -84,8 +96,13 @@ export function ensureThresholds(raw: Thresholds | null | undefined): Thresholds
     if (!Number.isFinite(th[p.key].max)) th[p.key].max = p.defMax;
     if (th[p.key].max < th[p.key].min) {
       const mid = (p.defMin + p.defMax) / 2;
-      th[p.key] = { min: mid - 0.1, max: mid + 0.1 };
+      th[p.key] = {
+        min: roundParamLimit(mid - 0.1, p.prec),
+        max: roundParamLimit(mid + 0.1, p.prec),
+      };
     }
+    th[p.key].min = roundParamLimit(th[p.key].min, p.prec);
+    th[p.key].max = roundParamLimit(th[p.key].max, p.prec);
   });
   return th;
 }
