@@ -233,10 +233,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (n: number) =>
       setState((s) => {
         if (n === 2 && !s.stock.length) return s;
-        if (n === 2 && !stockForMix(s.stock, s.excludedFromMixIds).length) return s;
+        const mixStock = n === 2 ? stockForMix(s.stock, s.excludedFromMixIds) : [];
+        if (n === 2 && !mixStock.length) return s;
         if (n === 3 && !s.currentMix.length) return s;
         const page = n === 1 ? "step1" : n === 2 ? "step2" : "step3";
-        return { ...s, curStep: n, curPage: page };
+        if (n !== 2 || s.curStep !== 1) return { ...s, curStep: n, curPage: page };
+
+        const baseline = computeQualityBaseline(mixStock);
+        if (!baseline) return { ...s, curStep: n, curPage: page };
+
+        const thresholds = ensureThresholds(baseline.thresholds);
+        saveToStorage("ntx_thresh", thresholds);
+        return { ...s, thresholds, curStep: n, curPage: page };
       }),
     []
   );
@@ -751,8 +759,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         l.allocBales = Math.max(1, Math.min(l.fardos, Math.round(val) || 1));
         l.allocWeight = l.allocBales * bw;
       } else {
-        l.allocWeight = Math.max(bw, Math.min(l.peso, val || bw));
-        l.allocBales = Math.max(1, Math.round(l.allocWeight / bw));
+        const desiredWeight = Number.isFinite(val) && val > 0 ? val : bw;
+        const desiredBales = bw > 0 ? Math.round(desiredWeight / bw) : 1;
+        l.allocBales = Math.max(1, Math.min(l.fardos, desiredBales || 1));
+        l.allocWeight = Math.min(l.peso, l.allocBales * bw);
       }
       return { ...s, currentMix: mix };
     });

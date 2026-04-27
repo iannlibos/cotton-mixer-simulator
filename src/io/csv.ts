@@ -144,7 +144,7 @@ export function parseStockRows(rows: Record<string, unknown>[]): ParseResult {
   if (!hasLote) errors.push("Coluna obrigatória ausente: LOTE");
   if (!hasWeightColumn(hmap)) {
     errors.push(
-      "Coluna obrigatória ausente: informe massa do lote (ex.: PESO em toneladas, ou TOTAL (kg) / equivalente em kg)."
+      "Coluna obrigatória ausente: informe massa do lote em kg (ex.: TOTAL (kg), PESO ou equivalente)."
     );
   }
   if (errors.length) return { lots: [], errors, warnings };

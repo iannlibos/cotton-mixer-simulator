@@ -7,6 +7,7 @@ import { fmtBRL } from "../engine/sequencer";
 import type { Lot } from "../domain/stock";
 import { fmtParam } from "../utils/paramFormat";
 import { nextSortState, sortRows, type SortColumn } from "../utils/tableSort";
+import { fmtKgFromTons } from "../utils/weight";
 import { StockOverviewSection } from "./StockOverviewSection";
 
 function sortMark(sort: { key: string; asc: boolean } | null, k: string) {
@@ -212,7 +213,7 @@ export function PageStep1() {
             Arraste o CSV aqui ou clique para selecionar
           </div>
           <div style={{ fontSize: 13, color: "var(--tx3)" }}>
-            Aceita: FORNECEDOR/PRODUTOR, LOTE, FARDOS, TAMANHO (P/G), TOTAL(kg)/PESO(ton), STR, UHML (mm ou in; convertido para mm), UI, MIC, SF, ELG, MAT opcional, MST opcional, SCI, CUSTO
+            Aceita: FORNECEDOR/PRODUTOR, LOTE, FARDOS, TAMANHO (P/G), TOTAL/PESO em kg, STR, UHML (mm ou in; convertido para mm), UI, MIC, SF, ELG, MAT opcional, MST opcional, SCI, CUSTO
           </div>
           <button className="btn btn-p" style={{ marginTop: 16 }}>
             Selecionar Arquivo
@@ -224,13 +225,13 @@ export function PageStep1() {
             <div>
               <div className="card-h">{stock.length} lotes carregados</div>
               <div style={{ fontSize: 12, color: "var(--tx3)", lineHeight: 1.5 }}>
-                Arquivo: {prodsFile.length} produtores · {tPFile.toFixed(1)} ton · {tFFile.toLocaleString("pt-BR")} fardos
+                Arquivo: {prodsFile.length} produtores · {fmtKgFromTons(tPFile)} kg · {tFFile.toLocaleString("pt-BR")} fardos
                 {pendingHvi > 0 ? (
                   <span> · {pendingHvi} lote{pendingHvi > 1 ? "s" : ""} com HVI pendente (não elegíveis)</span>
                 ) : null}
                 <br />
                 <strong style={{ color: "var(--cy)" }}>{mix.length}</strong> lotes selecionados para a mistura ·{" "}
-                {prodsInMix.length} produtores · {tPmix.toFixed(1)} ton · {tFmix.toLocaleString("pt-BR")} fardos
+                {prodsInMix.length} produtores · {fmtKgFromTons(tPmix)} kg · {tFmix.toLocaleString("pt-BR")} fardos
                 {baleSizeFilter !== "all" && <span> · {filteredStock.length} lotes com o filtro de fardo ativo</span>}
               </div>
             </div>
@@ -323,7 +324,7 @@ export function PageStep1() {
             {[
               { l: "Lotes", v: String(mix.length), c: "var(--cy)" },
               { l: "Produtores", v: String(prodsInMix.length), c: "var(--pp)" },
-              { l: "Peso Total", v: tPmix.toFixed(1) + " ton", c: "var(--tx)" },
+              { l: "Peso Total", v: fmtKgFromTons(tPmix) + " kg", c: "var(--tx)" },
               ...(hcdMix
                 ? [
                     {
@@ -433,7 +434,7 @@ export function PageStep1() {
                   <th onClick={() => handleStockSort("tamanho")} title="Tamanho do fardo (P = 1,10m · G = 1,40m)">
                     Tam.{sortMark(stockSort, "tamanho")}
                   </th>
-                  <th onClick={() => handleStockSort("peso")}>Peso{sortMark(stockSort, "peso")}</th>
+                  <th onClick={() => handleStockSort("peso")}>Peso (kg){sortMark(stockSort, "peso")}</th>
                   <th onClick={() => handleStockSort("fardos")}>Fardos{sortMark(stockSort, "fardos")}</th>
                   {hcdFile && (
                     <th onClick={() => handleStockSort("custo")}>
@@ -484,7 +485,7 @@ export function PageStep1() {
                     <td className="mono" style={{ textAlign: "center", color: "var(--tx2)" }}>
                       {r.tamanho ?? "—"}
                     </td>
-                    <td className="mono">{r.peso.toFixed(2)}</td>
+                    <td className="mono">{fmtKgFromTons(r.peso)}</td>
                     <td className="mono">{r.fardos}</td>
                     {hcdFile && (
                       <td

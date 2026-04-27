@@ -56,6 +56,42 @@ export interface SeqSide {
   b: SeqBale[];
 }
 
+export interface SequenceLotUsage {
+  produtor: string;
+  lote: string;
+  tamanho: BaleSize | null;
+  bales: number;
+  avgIq: number;
+}
+
+export function summarizeSequenceUsage(seq: SeqSide): SequenceLotUsage[] {
+  const grouped = new Map<string, { produtor: string; lote: string; tamanho: BaleSize | null; bales: number; iqSum: number }>();
+  [...seq.a, ...seq.b].forEach((b) => {
+    const tamanho = b.tamanho ?? null;
+    const key = `${b.produtor}\u0000${b.lote}\u0000${tamanho ?? ""}`;
+    const cur = grouped.get(key);
+    if (cur) {
+      cur.bales += 1;
+      cur.iqSum += b.iq;
+    } else {
+      grouped.set(key, {
+        produtor: b.produtor,
+        lote: b.lote,
+        tamanho,
+        bales: 1,
+        iqSum: b.iq,
+      });
+    }
+  });
+  return [...grouped.values()]
+    .map((r) => ({ ...r, avgIq: r.bales > 0 ? r.iqSum / r.bales : 0 }))
+    .sort((a, b) => (
+      a.produtor.localeCompare(b.produtor, "pt-BR", { sensitivity: "base" }) ||
+      a.lote.localeCompare(b.lote, "pt-BR", { sensitivity: "base", numeric: true }) ||
+      (a.tamanho ?? "").localeCompare(b.tamanho ?? "", "pt-BR")
+    ));
+}
+
 export interface SeqData {
   name: string;
   lots: Lot[];

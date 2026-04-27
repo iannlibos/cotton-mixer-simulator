@@ -8,10 +8,12 @@ import {
   seqParamOk,
   buildLayoutPlan,
   summarizeComposition,
+  summarizeSequenceUsage,
   type SeqSide,
   type LayoutPlan,
 } from "@/engine/sequencer";
 import { fmtParam } from "@/utils/paramFormat";
+import { fmtKgFromTons } from "@/utils/weight";
 
 declare module "jspdf" {
   interface jsPDF {
@@ -144,7 +146,7 @@ export function buildPDF(
   const doc = new jsPDF("landscape", "mm", "a4");
   const w = doc.internal.pageSize.getWidth();
 
-  drawDocHeader(doc, w, 14, "SANTANA TEXTILES · GERADOR DE MISTURAS", name, `${date}  ·  ${lots.length} lotes  ·  ${params.bales} fardos  ·  ${params.weight.toFixed(2)} ton`);
+  drawDocHeader(doc, w, 14, "SANTANA TEXTILES · GERADOR DE MISTURAS", name, `${date}  ·  ${lots.length} lotes  ·  ${params.bales} fardos  ·  ${fmtKgFromTons(params.weight)} kg`);
 
   let y = 38;
   doc.setFont("helvetica", "bold");
@@ -198,7 +200,7 @@ export function buildPDF(
         "Produtor",
         "Lote",
         "Fardos",
-        "Peso (ton)",
+        "Peso (kg)",
         "%",
         "UHML (mm)",
         "STR",
@@ -214,7 +216,7 @@ export function buildPDF(
       l.produtor,
       l.lote,
       l.allocBales,
-      (l.allocWeight || 0).toFixed(2),
+      fmtKgFromTons(l.allocWeight || 0),
       (((l.allocWeight || 0) / tw) * 100).toFixed(1) + "%",
       fmtParam("uhml", l.uhml),
       fmtParam("str_val", l.str_val),
@@ -295,6 +297,7 @@ export interface BuildSeqPdfInput {
   seqWeightKg: number;
   baleWtKg: number;
   sequences: SeqSide[];
+  layoutPlans?: LayoutPlan[];
   /** Para marcação OK/FORA nos parâmetros (igual à tela). */
   thresholds?: Thresholds;
   bps?: number;
@@ -499,18 +502,23 @@ function drawLayoutStripWrapped(
   y0: number,
   w: number,
   rows: number,
+  maxHeight?: number,
 ): number {
   const cuts = computeRowCuts(plan, rows);
   const bounds = [0, ...cuts, plan.areaLength];
   const rowLens = bounds.slice(1).map((e, i) => e - bounds[i]);
   const maxRowLen = Math.max(...rowLens);
-  const scale = w / maxRowLen;
-  const armH = plan.areaWidth * scale;
-  const canvasH = plan.canvasHeight * scale;
   // Espaço entre linhas (inclui 1 mm visual + ~5 mm de ticks/rótulos). Valor
   // apertado o suficiente para caber 3 linhas de pista + cromos + rodapé em
   // A3 paisagem, mesmo nos modos com canvas estendido (endcaps de 2,32 m).
-  const rowGap = 8;
+  const rowGap = 6;
+  const widthScale = w / maxRowLen;
+  const heightScale = maxHeight && maxHeight > 0
+    ? Math.max(1, (maxHeight - (rows - 1) * rowGap - 5) / (rows * plan.canvasHeight))
+    : widthScale;
+  const scale = Math.min(widthScale, heightScale);
+  const armH = plan.areaWidth * scale;
+  const canvasH = plan.canvasHeight * scale;
   let yCur = y0;
 
   for (let r = 0; r < rows; r++) {
@@ -563,7 +571,7 @@ function drawLayoutStripWrapped(
       drawBale(doc, px, py, pw, ph, p.bale.produtor, p.bale.lote, p.bale.iq, p.tamanho);
     });
 
-    yCur += canvasH + rowGap;
+    yCur += canvasH + (r === rows - 1 ? 5 : rowGap);
   }
   return yCur;
 }
@@ -633,6 +641,55 @@ function drawQualityChips(
   return cy + rowsN * chipH + (rowsN - 1) * chipGap + 3;
 }
 
+function drawUsageTable(doc: jsPDF, seq: SeqSide, x: number, y: number, w: number): number {
+  const rows = summarizeSequenceUsage(seq).map((r) => [
+    r.produtor,
+    r.lote,
+    r.tamanho ?? "—",
+    String(r.bales),
+    r.avgIq.toFixed(0),
+  ]);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  setText(doc, INK);
+  doc.text("FORNECEDORES, LOTES E FARDOS DA SEQUÊNCIA", x, y);
+
+  doc.autoTable({
+    startY: y + 3,
+    head: [["Fornecedor", "Lote", "Tam.", "Fardos", "IQ méd."]],
+    body: rows,
+    ...lightTableStyles(),
+    margin: { left: x, right: doc.internal.pageSize.getWidth() - x - w, bottom: 18 },
+    tableWidth: w,
+    styles: {
+      valign: "middle" as const,
+      font: "helvetica" as const,
+      fontSize: 7,
+      cellPadding: 1.2,
+      overflow: "linebreak" as const,
+    },
+    headStyles: {
+      fillColor: INK,
+      textColor: PAPER,
+      fontStyle: "bold" as const,
+      fontSize: 7,
+      cellPadding: 1.4,
+      lineColor: INK,
+      lineWidth: 0.2,
+    },
+    columnStyles: {
+      0: { cellWidth: w * 0.42 },
+      1: { cellWidth: w * 0.3 },
+      2: { cellWidth: w * 0.08, halign: "center" as const },
+      3: { cellWidth: w * 0.1, halign: "center" as const },
+      4: { cellWidth: w * 0.1, halign: "center" as const },
+    },
+  });
+
+  return doc.lastAutoTable.finalY + 3;
+}
+
 function drawSeqFooter(
   doc: jsPDF,
   pageW: number,
@@ -660,7 +717,7 @@ function drawSeqFooter(
 
 /** Página 1: resumo A4 retrato. Demais páginas: 1 sequência por A3 paisagem. */
 export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
-  const { mixName, params, lots, seqWeightKg, baleWtKg, sequences } = input;
+  const { mixName, params, lots, seqWeightKg, baleWtKg, sequences, layoutPlans } = input;
   const thresholds = input.thresholds ?? buildDefaultThresholds();
   const bps = input.bps ?? 0;
   const used = input.used ?? 0;
@@ -679,7 +736,7 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     m,
     "SANTANA TEXTILES · PLANEJADOR DE SEQUÊNCIAS",
     mixName || "Mistura",
-    `${params.weight != null ? Number(params.weight).toFixed(2) : "—"} t · ${params.bales != null ? params.bales : "—"} fardos · ${(baleWtKg || 0).toFixed(1)} kg/fardo · alvo ${seqWeightKg} kg/seq`,
+    `${params.weight != null ? fmtKgFromTons(Number(params.weight)) : "—"} kg · ${params.bales != null ? params.bales : "—"} fardos · ${(baleWtKg || 0).toFixed(1)} kg/fardo · alvo ${seqWeightKg} kg/seq`,
   );
 
   let y = 40;
@@ -834,12 +891,11 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     const lts = new Set(all.map((b) => b.lote)).size;
 
     const comp = summarizeComposition(all);
-    const plan = buildLayoutPlan(seq);
+    const plan = layoutPlans?.[si] ?? buildLayoutPlan(seq);
 
     // Meta (contagem de fardos/peso/composição) à esquerda + selo IQ no canto.
-    // Colocado imediatamente após o cabeçalho para deixar os chips e a pista
-    // acima da dobra inferior do A3 paisagem, sem competir por espaço
-    // vertical com as 3 linhas de layout.
+    // Colocado imediatamente após o cabeçalho para deixar os chips, a pista e
+    // a lista operacional dentro da área imprimível do A3 paisagem.
     const metaRowTop = 27;
     const badgeW = 52;
     const badgeH = 13;
@@ -896,11 +952,10 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     );
     cy += 8;
 
-    // Layout em **três** linhas: cada fardo fica ~3× maior que em A4 paisagem
-    // (escala ≈ 25,9 mm/m). Isso garante que o produtor e o lote caibam
-    // legíveis mesmo nos fardos P/G dispostos transversalmente (largura útil
-    // passa de ~10 mm para ~15 mm).
-    cy = drawLayoutStripWrapped(doc, plan, ix, cy + 3, innerW, 3);
+    const usageRows = summarizeSequenceUsage(seq).length;
+    const estimatedUsageH = Math.min(76, 13 + usageRows * 5.4);
+    const layoutMaxH = Math.max(80, pageH - m - estimatedUsageH - cy - 12);
+    cy = drawLayoutStripWrapped(doc, plan, ix, cy + 3, innerW, 2, layoutMaxH);
 
     if (plan.notes.length > 0) {
       doc.setFont("helvetica", "normal");
@@ -913,6 +968,9 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
         cy += lines.length * 4 + 1;
       });
     }
+
+    cy += 3;
+    drawUsageTable(doc, seq, ix, cy, innerW);
   });
 
   const totalPages = doc.getNumberOfPages();

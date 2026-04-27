@@ -6,6 +6,7 @@ import { fmtBRL } from "../engine/sequencer";
 import type { Lot } from "../domain/stock";
 import { fmtParam } from "../utils/paramFormat";
 import { nextSortState, sortRows, type SortColumn } from "../utils/tableSort";
+import { fmtKgFromTons } from "../utils/weight";
 
 function sortMark(sort: { key: string; asc: boolean } | null, k: string) {
   if (!sort || sort.key !== k) return null;
@@ -99,7 +100,7 @@ export function PageHist() {
         <div>
           <div className="pg-title">{h.name}</div>
           <div className="pg-sub" style={{ marginBottom: 0 }}>
-            {h.date} · {h.lots.length} lotes · {h.params.weight.toFixed(2)} ton
+            {h.date} · {h.lots.length} lotes · {fmtKgFromTons(h.params.weight)} kg
             {hcd && ` · ${fmtBRL(h.params.custoTon)}/ton · Total: ${fmtBRL(h.params.custoTotal)}`}
             {" "}· Score: {h.score}
           </div>
@@ -148,8 +149,8 @@ export function PageHist() {
                 >
                   Tam.{sortMark(histSort, "tamanho")}
                 </th>
-                <th onClick={() => handleHistSort("weight")}>Peso (ton){sortMark(histSort, "weight")}</th>
-                <th onClick={() => handleHistSort("disp")}>Disp.{sortMark(histSort, "disp")}</th>
+                <th onClick={() => handleHistSort("weight")}>Peso (kg){sortMark(histSort, "weight")}</th>
+                <th onClick={() => handleHistSort("disp")}>Disp. (kg){sortMark(histSort, "disp")}</th>
                 <th onClick={() => handleHistSort("pct")}>%{sortMark(histSort, "pct")}</th>
                 {hcd && (
                   <th onClick={() => handleHistSort("custo")}>
@@ -181,7 +182,7 @@ export function PageHist() {
                     <td className="mono" style={{ textAlign: "center", color: "var(--tx2)" }}>
                       {l.tamanho ?? "—"}
                     </td>
-                    <td className="mono">{(l.allocWeight || 0).toFixed(2)}</td>
+                    <td className="mono">{fmtKgFromTons(l.allocWeight || 0)}</td>
                     <td
                       className="mono"
                       style={{
@@ -189,7 +190,7 @@ export function PageHist() {
                         color: is100 ? "var(--rd)" : usage > 80 ? "var(--am)" : "var(--tx3)",
                       }}
                     >
-                      {l.peso.toFixed(2)}
+                      {fmtKgFromTons(l.peso)}
                     </td>
                     <td className="mono">{tw > 0 ? (((l.allocWeight || 0) / tw) * 100).toFixed(1) : "0"}%</td>
                     {hcd && <td className="mono" style={{ color: "var(--cy)" }}>{fmtBRL(l.custo)}</td>}

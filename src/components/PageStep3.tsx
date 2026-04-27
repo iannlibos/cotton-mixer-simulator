@@ -3,12 +3,13 @@ import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Toolti
 import { Bar } from "react-chartjs-2";
 import { useApp } from "../context/AppContext";
 import { PARAMS } from "../domain/types";
-import { baleWeight, weightedAverage } from "../engine/constraints";
+import { weightedAverage } from "../engine/constraints";
 import { buildPDF } from "../utils/pdf";
 import { fmtBRL } from "../engine/sequencer";
 import type { Lot } from "../domain/stock";
 import { fmtParam } from "../utils/paramFormat";
 import { nextSortState, sortRows, type SortColumn } from "../utils/tableSort";
+import { fmtKgFromTons, kgToTons, tonsToKg } from "../utils/weight";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, ...registerables);
 
@@ -46,6 +47,7 @@ export function PageStep3() {
   } = useApp();
 
   const [availOpen, setAvailOpen] = useState(false);
+  const [weightDrafts, setWeightDrafts] = useState<Record<number, string>>({});
   const hcd = hasCostData();
 
   const params = getParams();
@@ -89,8 +91,8 @@ export function PageStep3() {
   const chartData = {
     labels: chartLabels,
     datasets: [
-      { label: "Antes", data: chartLabels.map((n) => +byP[n].before.toFixed(1)), backgroundColor: "rgba(34,211,238,.25)", borderRadius: 4 },
-      { label: "Depois", data: chartLabels.map((n) => +byP[n].after.toFixed(1)), backgroundColor: "rgba(16,185,129,.5)", borderRadius: 4 },
+      { label: "Antes", data: chartLabels.map((n) => Math.round(tonsToKg(byP[n].before))), backgroundColor: "rgba(34,211,238,.25)", borderRadius: 4 },
+      { label: "Depois", data: chartLabels.map((n) => Math.round(tonsToKg(byP[n].after))), backgroundColor: "rgba(16,185,129,.5)", borderRadius: 4 },
     ],
   };
   const chartOptions = {
@@ -248,8 +250,8 @@ export function PageStep3() {
                 </span>
                 <span className="step3-title-stats__sep">·</span>
                 <span className="step3-title-stat">
-                  <span className="v mono">{params.weight.toFixed(2)}</span>
-                  <span>ton</span>
+                  <span className="v mono">{fmtKgFromTons(params.weight)}</span>
+                  <span>kg</span>
                 </span>
               </div>
               <div className="step3-producer-strip">
@@ -350,9 +352,9 @@ export function PageStep3() {
               <>
                 <div className="mx-item accent">
                 <div className="mx-lbl">Peso</div>
-                <div className="mx-val">{params.weight.toFixed(2)}</div>
-                <div className="mx-rng mono">alvo: {targetWeight} ton</div>
-                <div className="mx-st" style={{ color: wMatch ? "var(--gn)" : "var(--am)" }}>{wMatch ? "✓ Atingido" : `Faltam ${Math.max(0, targetWeight - params.weight).toFixed(2)}`}</div>
+                <div className="mx-val">{fmtKgFromTons(params.weight)}</div>
+                <div className="mx-rng mono">alvo: {fmtKgFromTons(targetWeight)} kg</div>
+                <div className="mx-st" style={{ color: wMatch ? "var(--gn)" : "var(--am)" }}>{wMatch ? "✓ Atingido" : `Faltam ${fmtKgFromTons(Math.max(0, targetWeight - params.weight))} kg`}</div>
               </div>
               {hcd && (
                 <div className="mx-item" style={{ borderColor: "rgba(34,211,238,.3)", background: "rgba(34,211,238,.06)" }}>
@@ -401,8 +403,8 @@ export function PageStep3() {
                   Produtor / Lote{sortMark(mixSort, "pl")}
                 </th>
                 <th onClick={() => handleMixSort("bales")}>Fardos{sortMark(mixSort, "bales")}</th>
-                <th onClick={() => handleMixSort("weight")}>Peso (ton){sortMark(mixSort, "weight")}</th>
-                <th onClick={() => handleMixSort("disp")}>Disp.{sortMark(mixSort, "disp")}</th>
+                <th onClick={() => handleMixSort("weight")}>Peso (kg){sortMark(mixSort, "weight")}</th>
+                <th onClick={() => handleMixSort("disp")}>Disp. (kg){sortMark(mixSort, "disp")}</th>
                 <th onClick={() => handleMixSort("pct")}>%{sortMark(mixSort, "pct")}</th>
                 {hcd && (
                   <th onClick={() => handleMixSort("custo")}>
@@ -426,10 +428,10 @@ export function PageStep3() {
             <tbody>
               {currentMix.map((l, i) => {
                 const pct = tw > 0 ? ((l.allocWeight || 0) / tw * 100).toFixed(1) : "0";
-                const bw = baleWeight(l);
                 const usage = l.peso > 0 ? ((l.allocWeight || 0) / l.peso * 100) : 0;
                 const is100 = usage >= 99.5;
                 const lotCost = l.custo * (l.allocWeight || 0);
+                const weightDraft = weightDrafts[l.id];
                 return (
                   <tr key={l.id + "-" + i} style={is100 ? { background: "var(--rdbg)" } : undefined}>
                     <td>
@@ -441,9 +443,28 @@ export function PageStep3() {
                       <input type="number" className="inp inp-sm inp-num mono" value={l.allocBales || 0} min={1} max={l.fardos} onChange={(e) => editAllocation(i, "bales", parseInt(e.target.value, 10) || 1)} />
                     </td>
                     <td>
-                      <input type="number" className="inp inp-sm inp-num mono" value={(l.allocWeight || 0).toFixed(2)} min={bw} max={l.peso} step={0.01} style={{ width: 75 }} onChange={(e) => editAllocation(i, "weight", parseFloat(e.target.value) || bw)} />
+                      <input
+                        type="number"
+                        className="inp inp-sm inp-num mono"
+                        value={weightDraft ?? String(Math.round(tonsToKg(l.allocWeight || 0)))}
+                        step={1}
+                        style={{ width: 90 }}
+                        onChange={(e) => {
+                          const text = e.target.value;
+                          setWeightDrafts((drafts) => ({ ...drafts, [l.id]: text }));
+                          const kg = Number(text.replace(",", "."));
+                          if (Number.isFinite(kg) && kg > 0) editAllocation(i, "weight", kgToTons(kg));
+                        }}
+                        onBlur={() =>
+                          setWeightDrafts((drafts) => {
+                            const next = { ...drafts };
+                            delete next[l.id];
+                            return next;
+                          })
+                        }
+                      />
                     </td>
-                    <td className="mono" style={{ fontSize: 11, color: is100 ? "var(--rd)" : usage > 80 ? "var(--am)" : "var(--tx3)" }}>{l.peso.toFixed(2)}</td>
+                    <td className="mono" style={{ fontSize: 11, color: is100 ? "var(--rd)" : usage > 80 ? "var(--am)" : "var(--tx3)" }}>{fmtKgFromTons(l.peso)}</td>
                     <td className="mono" style={{ color: "var(--cy)" }}>{pct}%</td>
                     {hcd && <td className="mono" style={{ color: costColor(l.custo, avgStockCost), fontWeight: 700 }}>{fmtBRL(l.custo)}</td>}
                     {hcd && <td className="mono" style={{ fontSize: 11, color: "var(--tx2)" }}>{fmtBRL(lotCost)}</td>}
@@ -465,7 +486,7 @@ export function PageStep3() {
                 <tr style={{ background: "var(--sf3)", fontWeight: 700 }}>
                   <td style={{ textAlign: "left", paddingLeft: 12 }}>TOTAL</td>
                   <td className="mono">{params.bales}</td>
-                  <td className="mono">{params.weight.toFixed(2)}</td>
+                  <td className="mono">{fmtKgFromTons(params.weight)}</td>
                   <td></td>
                   <td className="mono">100%</td>
                   {hcd && <td className="mono" style={{ color: "var(--cy)" }}>{fmtBRL(params.custoTon)}</td>}
@@ -498,7 +519,7 @@ export function PageStep3() {
                         <th className="th-static" />
                         <th onClick={() => handleAvailSort("prod")}>Produtor{sortMark(availSort, "prod")}</th>
                         <th onClick={() => handleAvailSort("lote")}>Lote{sortMark(availSort, "lote")}</th>
-                        <th onClick={() => handleAvailSort("peso")}>Peso{sortMark(availSort, "peso")}</th>
+                        <th onClick={() => handleAvailSort("peso")}>Peso (kg){sortMark(availSort, "peso")}</th>
                         {hcd && (
                           <th onClick={() => handleAvailSort("custo")}>
                             R$/ton{sortMark(availSort, "custo")}
@@ -519,7 +540,7 @@ export function PageStep3() {
                           </td>
                           <td>{r.produtor}</td>
                           <td style={{ fontWeight: 400, color: "var(--tx3)" }}>{r.lote}</td>
-                          <td className="mono">{r.peso.toFixed(2)}</td>
+                          <td className="mono">{fmtKgFromTons(r.peso)}</td>
                           {hcd && <td className="mono" style={{ color: costColor(r.custo, avgStockCost), fontWeight: 700 }}>{fmtBRL(r.custo)}</td>}
                           <td className={`mono ${cellCls("uhml", r.uhml)}`}>{fmtParam("uhml", r.uhml)}</td>
                           <td className={`mono ${cellCls("str_val", r.str_val)}`}>{fmtParam("str_val", r.str_val)}</td>
@@ -546,9 +567,9 @@ export function PageStep3() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
           {[
-            { l: "Antes (total estoque)", v: stockBeforeTotal.toFixed(1) + " ton", c: "var(--tx)" },
-            { l: "Alocado na mistura", v: allocatedTotal.toFixed(2) + " ton", c: "var(--am)" },
-            { l: "Depois (restante)", v: stockAfterTotal.toFixed(1) + " ton", c: "var(--cy)" },
+            { l: "Antes (total estoque)", v: fmtKgFromTons(stockBeforeTotal) + " kg", c: "var(--tx)" },
+            { l: "Alocado na mistura", v: fmtKgFromTons(allocatedTotal) + " kg", c: "var(--am)" },
+            { l: "Depois (restante)", v: fmtKgFromTons(stockAfterTotal) + " kg", c: "var(--cy)" },
             { l: "Consumo do estoque", v: fmtShare(allocatedTotal, stockBeforeTotal), c: "var(--rd)" },
           ].map((k) => (
             <div key={k.l} style={{ background: "var(--sf2)", border: "1px solid var(--bd)", borderRadius: "var(--r)", padding: 10, textAlign: "center" }}>
@@ -565,9 +586,9 @@ export function PageStep3() {
                   Produtor{sortMark(deltaSort, "produtor")}
                 </th>
                 <th onClick={() => handleDeltaSort("lote")}>Lote{sortMark(deltaSort, "lote")}</th>
-                <th onClick={() => handleDeltaSort("antes")}>Antes (ton){sortMark(deltaSort, "antes")}</th>
-                <th onClick={() => handleDeltaSort("alloc")}>Alocado (ton){sortMark(deltaSort, "alloc")}</th>
-                <th onClick={() => handleDeltaSort("after")}>Depois (ton){sortMark(deltaSort, "after")}</th>
+                <th onClick={() => handleDeltaSort("antes")}>Antes (kg){sortMark(deltaSort, "antes")}</th>
+                <th onClick={() => handleDeltaSort("alloc")}>Alocado (kg){sortMark(deltaSort, "alloc")}</th>
+                <th onClick={() => handleDeltaSort("after")}>Depois (kg){sortMark(deltaSort, "after")}</th>
                 <th onClick={() => handleDeltaSort("lotPctBefore")}>% lote antes{sortMark(deltaSort, "lotPctBefore")}</th>
                 <th onClick={() => handleDeltaSort("lotPctAfter")}>% lote depois{sortMark(deltaSort, "lotPctAfter")}</th>
                 <th onClick={() => handleDeltaSort("deltaPct")}>Δ% do lote{sortMark(deltaSort, "deltaPct")}</th>
@@ -578,9 +599,9 @@ export function PageStep3() {
                 <tr key={r.id}>
                   <td>{r.produtor}</td>
                   <td style={{ fontWeight: 400, color: "var(--tx3)" }}>{r.lote}</td>
-                  <td className="mono">{r.peso.toFixed(2)}</td>
-                  <td className={`mono ${r.alloc > 0 ? "delta-neg" : ""}`}>{r.alloc > 0 ? r.alloc.toFixed(2) : "—"}</td>
-                  <td className="mono">{r.after.toFixed(2)}</td>
+                  <td className="mono">{fmtKgFromTons(r.peso)}</td>
+                  <td className={`mono ${r.alloc > 0 ? "delta-neg" : ""}`}>{r.alloc > 0 ? fmtKgFromTons(r.alloc) : "—"}</td>
+                  <td className="mono">{fmtKgFromTons(r.after)}</td>
                   <td className="mono">{fmtShare(r.peso, stockBeforeTotal)}</td>
                   <td className="mono">{fmtShare(r.after, stockAfterTotal)}</td>
                   <td className={`mono ${r.alloc > 0 ? "delta-neg" : ""}`}>
@@ -597,9 +618,9 @@ export function PageStep3() {
             <thead>
               <tr>
                 <th style={{ textAlign: "left", paddingLeft: 12 }}>Produtor</th>
-                <th>Antes (ton)</th>
+                <th>Antes (kg)</th>
                 <th>% antes</th>
-                <th>Depois (ton)</th>
+                <th>Depois (kg)</th>
                 <th>% depois</th>
                 <th>Δ p.p.</th>
               </tr>
@@ -608,9 +629,9 @@ export function PageStep3() {
               {producerParticipationRows.map((r) => (
                 <tr key={r.produtor}>
                   <td style={{ textAlign: "left", paddingLeft: 12 }}>{r.produtor}</td>
-                  <td className="mono">{r.before.toFixed(2)}</td>
+                  <td className="mono">{fmtKgFromTons(r.before)}</td>
                   <td className="mono">{r.beforePct.toFixed(1)}%</td>
-                  <td className="mono">{r.after.toFixed(2)}</td>
+                  <td className="mono">{fmtKgFromTons(r.after)}</td>
                   <td className="mono">{r.afterPct.toFixed(1)}%</td>
                   <td className={`mono ${r.deltaPp < 0 ? "delta-neg" : r.deltaPp > 0 ? "delta-pos" : ""}`}>
                     {r.deltaPp > 0 ? "+" : ""}{r.deltaPp.toFixed(1)}
@@ -620,7 +641,7 @@ export function PageStep3() {
             </tbody>
           </table>
         </div>
-        <div className="card-sub" style={{ marginBottom: 8 }}>Estoque por produtor (ton): antes e depois</div>
+        <div className="card-sub" style={{ marginBottom: 8 }}>Estoque por produtor (kg): antes e depois</div>
         <div style={{ height: 300, minHeight: 300 }}>
           <Bar data={chartData} options={chartOptions} />
         </div>

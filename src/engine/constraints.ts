@@ -1,6 +1,7 @@
 import { ALL_KEYS, PARAMS, Thresholds } from "../domain/types.js";
 import type { Lot, MixParams } from "../domain/stock.js";
 import { roundParam } from "../utils/paramFormat.js";
+import { fmtKgFromTons } from "../utils/weight.js";
 
 export function weightedAverage(lots: Lot[], key: string, weightKey: string): number {
   const tw = lots.reduce((sum, lot) => sum + (lot[weightKey as keyof Lot] as number || 0), 0);
@@ -212,7 +213,7 @@ export function infeasibilityDiagnosis(
   if (totalStockWeight < targetWeight) {
     diagnostics.push({
       code: "INSUFFICIENT_STOCK",
-      message: `Estoque insuficiente (${totalStockWeight.toFixed(2)} ton < ${targetWeight.toFixed(2)} ton).`,
+      message: `Estoque insuficiente (${fmtKgFromTons(totalStockWeight)} kg < ${fmtKgFromTons(targetWeight)} kg).`,
       suggestion: "Reduzir peso alvo ou incluir mais lotes no estoque.",
     });
   }

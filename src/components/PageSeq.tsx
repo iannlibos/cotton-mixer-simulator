@@ -9,6 +9,7 @@ import {
   seqParamOk,
   buildLayoutPlan,
   summarizeComposition,
+  summarizeSequenceUsage,
   type SeqSide,
   type SeqBale,
   type LayoutPlan,
@@ -16,6 +17,7 @@ import {
 } from "../engine/sequencer";
 import { BALE_P_LENGTH_M, BALE_G_LENGTH_M } from "../domain/stock";
 import { buildSeqPDF } from "../utils/pdf";
+import { fmtKgFromTons } from "../utils/weight";
 
 /**
  * Regras de troca de fardos (operacionais):
@@ -74,6 +76,23 @@ function repackRowContaining(placements: LayoutPlacement[], pivotIdx: number): v
 const LAYOUT_DIMS_TEXT = {
   area: "45,35 × 2,20 m",
 };
+
+function csvCell(value: string | number | null | undefined): string {
+  const text = value == null ? "" : String(value);
+  return /[",;\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadTextFile(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
 function iqLabel(iq: number): string {
   if (iq >= 75) return "Excelente";
@@ -497,6 +516,7 @@ export function PageSeq() {
       seqWeightKg: seqWeight,
       baleWtKg,
       sequences,
+      layoutPlans,
       thresholds,
       bps,
       used,
@@ -506,19 +526,45 @@ export function PageSeq() {
     doc.save(`${(h.name || "sequencias").replace(/\s+/g, "_")}_sequencias.pdf`);
   };
 
+  const handleUsageCsv = () => {
+    if (!h || !sequences.length) return;
+    const rows = [
+      ["Sequência", "Fornecedor", "Lote", "Tamanho", "Fardos", "IQ médio"],
+      ...sequences.flatMap((seq, si) =>
+        summarizeSequenceUsage(seq).map((r) => [
+          String(si + 1),
+          r.produtor,
+          r.lote,
+          r.tamanho ?? "Sem tamanho",
+          String(r.bales),
+          r.avgIq.toFixed(1).replace(".", ","),
+        ]),
+      ),
+    ];
+    const csv = rows.map((row) => row.map(csvCell).join(";")).join("\n");
+    downloadTextFile(
+      `${(h.name || "sequencias").replace(/\s+/g, "_")}_fornecedores_lotes.csv`,
+      "\uFEFF" + csv,
+      "text/csv;charset=utf-8",
+    );
+  };
+
   return (
     <div className="page page--wide active" style={{ display: "block" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
           <div className="pg-title">Sequências — {h.name}</div>
           <div className="pg-sub" style={{ marginBottom: 0 }}>
-            {h.params.weight.toFixed(2)} ton · {h.lots.reduce((s, l) => s + (l.allocBales ?? 0), 0)} fardos
+            {fmtKgFromTons(h.params.weight)} kg · {h.lots.reduce((s, l) => s + (l.allocBales ?? 0), 0)} fardos
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-s" onClick={goBack}>← Voltar</button>
           <button type="button" className="btn btn-s btn-sm" onClick={handleSeqPDF} disabled={!generated || !sequences.length}>
             📄 PDF
+          </button>
+          <button type="button" className="btn btn-s btn-sm" onClick={handleUsageCsv} disabled={!generated || !sequences.length}>
+            CSV fornecedores/lotes
           </button>
         </div>
       </div>
@@ -645,6 +691,7 @@ export function PageSeq() {
         const prds = [...new Set(all.map(b => b.produtor))];
         const lts = [...new Set(all.map(b => b.lote))];
         const sp = computeSeqParams(all);
+        const usageRows = summarizeSequenceUsage(seq);
 
         const swapOpen = selected && selected.si === si;
         const candidates: { b: SeqBale; si: number; side: "a" | "b"; bi: number }[] = [];
@@ -744,6 +791,42 @@ export function PageSeq() {
                 )}
               </div>
             )}
+
+            <div className="seq-usage">
+              <div className="seq-usage-head">
+                <div>
+                  <div className="seq-usage-title">Fornecedores, lotes e fardos da sequência</div>
+                  <div className="seq-usage-sub">
+                    Lista operacional agregada para separação dos fardos antes da montagem física.
+                  </div>
+                </div>
+                <span className="seq-usage-total">{n} fardos</span>
+              </div>
+              <div className="seq-usage-table-wrap">
+                <table className="seq-usage-table">
+                  <thead>
+                    <tr>
+                      <th>Fornecedor</th>
+                      <th>Lote</th>
+                      <th>Tam.</th>
+                      <th>Fardos</th>
+                      <th>IQ méd.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usageRows.map((r) => (
+                      <tr key={`${r.produtor}:${r.lote}:${r.tamanho ?? "sem"}`}>
+                        <td>{r.produtor}</td>
+                        <td>{r.lote}</td>
+                        <td>{r.tamanho ?? "—"}</td>
+                        <td className="mono">{r.bales}</td>
+                        <td className="mono">{r.avgIq.toFixed(0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
 
             {swapOpen && selected && (
               <div className="seq-swap open">

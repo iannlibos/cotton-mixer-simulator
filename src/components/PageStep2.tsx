@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useApp } from "../context/AppContext";
 import { fmtBRL } from "../engine/sequencer";
 import { ThresholdLimitsEditor } from "./ThresholdLimitsEditor";
+import { fmtKgFromTons, kgToTons, tonsToKg } from "../utils/weight";
 
 export function PageStep2() {
   const {
@@ -21,6 +22,7 @@ export function PageStep2() {
   } = useApp();
 
   const hcd = hasCostData();
+  const [targetWeightKgText, setTargetWeightKgText] = useState(() => String(Math.round(tonsToKg(targetWeight))));
 
   useEffect(() => {
     if (stockForMixture.length) {
@@ -28,6 +30,10 @@ export function PageStep2() {
       setTargetWeight(Math.round(tP * 0.15 * 100) / 100 || 30);
     }
   }, [stockForMixture, setTargetWeight]);
+
+  useEffect(() => {
+    setTargetWeightKgText(String(Math.round(tonsToKg(targetWeight))));
+  }, [targetWeight]);
 
   const steps = [
     { n: 1, l: "Estoque" },
@@ -65,13 +71,18 @@ export function PageStep2() {
       <div className="card">
         <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap" }}>
           <div>
-            <label className="lbl">Peso Alvo (ton)</label>
+            <label className="lbl">Peso Alvo (kg)</label>
             <input
               type="number"
               className="inp inp-num"
-              value={targetWeight}
-              onChange={(e) => setTargetWeight(parseFloat(e.target.value) || 30)}
-              step={0.01}
+              value={targetWeightKgText}
+              onChange={(e) => {
+                const text = e.target.value;
+                setTargetWeightKgText(text);
+                const kg = Number(text.replace(",", "."));
+                if (Number.isFinite(kg) && kg > 0) setTargetWeight(kgToTons(kg));
+              }}
+              step={1}
               style={{ width: 130 }}
             />
           </div>
@@ -158,7 +169,7 @@ export function PageStep2() {
                 <div className="sug-row">
                   <span className="sug-label">Peso</span>
                   <span className="sug-val" style={{ color: wMatch ? "var(--gn)" : "var(--am)" }}>
-                    {p.weight.toFixed(2)} ton
+                    {fmtKgFromTons(p.weight)} kg
                   </span>
                 </div>
                 <div className="sug-row">

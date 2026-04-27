@@ -1596,6 +1596,89 @@ select {
 }
 .seq-layout-notes li { margin-bottom: 2px; }
 
+.seq-usage {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--bd);
+}
+
+.seq-usage-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.seq-usage-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--tx2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.seq-usage-sub {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--tx3);
+}
+
+.seq-usage-total {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--cy);
+  background: var(--cybg);
+  border: 1px solid var(--cybd);
+  border-radius: 999px;
+  padding: 4px 9px;
+}
+
+.seq-usage-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--sf2);
+}
+
+.seq-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 520px;
+  font-size: 11px;
+}
+
+.seq-usage-table th,
+.seq-usage-table td {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--bd);
+  text-align: left;
+}
+
+.seq-usage-table th {
+  font-size: 9px;
+  color: var(--tx3);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--sf);
+}
+
+.seq-usage-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.seq-usage-table td:nth-child(3),
+.seq-usage-table td:nth-child(4),
+.seq-usage-table td:nth-child(5),
+.seq-usage-table th:nth-child(3),
+.seq-usage-table th:nth-child(4),
+.seq-usage-table th:nth-child(5) {
+  text-align: center;
+  white-space: nowrap;
+}
+
 .mx-item.cost {
   border-color: rgba(34, 211, 238, 0.3);
   background: rgba(34, 211, 238, 0.06);
