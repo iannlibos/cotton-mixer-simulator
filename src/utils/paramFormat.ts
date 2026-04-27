@@ -3,6 +3,8 @@ import { PARAMS } from "../domain/types";
 /** Decimal places per HVI parameter; SCI is a whole-number index in the UI. */
 const PREC_MAP: Record<string, number> = {
   ...(Object.fromEntries(PARAMS.map((p) => [p.key, p.prec])) as Record<string, number>),
+  mat: 3,
+  mst: 1,
   sci: 0,
 };
 

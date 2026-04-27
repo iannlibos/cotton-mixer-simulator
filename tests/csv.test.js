@@ -69,6 +69,29 @@ test("csv parser rounds MIC/MST to stable decimals (float noise)", () => {
   assert.equal(parsed.lots[0].hviComplete, true);
 });
 
+test("csv parser does not require MST or MAT for HVI completeness", () => {
+  const rows = [
+    {
+      PRODUTOR: "A",
+      LOTE: "L1",
+      PESO: "10",
+      UHML: "30",
+      STR: "30",
+      UI: "80",
+      MIC: "4",
+      SF: "8",
+      ELG: "5",
+      SCI: "120",
+    },
+  ];
+  const parsed = parseStockRows(rows);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.lots[0].mat, 0);
+  assert.equal(parsed.lots[0].mst, 0);
+  assert.equal(parsed.lots[0].hviComplete, true);
+  assert.equal(parsed.warnings.some((w) => w.includes("medidas HVI incompletas")), false);
+});
+
 test("csv parser marks HVI incomplete when any quality field is zero", () => {
   const rows = [
     {
@@ -89,5 +112,5 @@ test("csv parser marks HVI incomplete when any quality field is zero", () => {
   const parsed = parseStockRows(rows);
   assert.equal(parsed.errors.length, 0);
   assert.equal(parsed.lots[0].hviComplete, false);
-  assert.ok(parsed.warnings.some((w) => w.includes("medidas HVI incompletas")));
+  assert.ok(parsed.warnings.some((w) => w.includes("medidas obrigatórias incompletas") && w.includes("STR")));
 });

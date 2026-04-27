@@ -1,6 +1,37 @@
 import { useApp } from "../context/AppContext";
 import { ThresholdLimitsEditor } from "./ThresholdLimitsEditor";
 
+const PRIORITY_OPTIONS = [
+  {
+    id: "rotation_first",
+    title: "Produtor com maior estoque",
+    tag: "Padrão",
+    desc: "Aproxima a mistura da participação de cada produtor no estoque disponível, dando mais giro para quem concentra maior volume.",
+    weights: "Mais peso para proporcionalidade por produtor, mantendo qualidade e regras como restrições.",
+  },
+  {
+    id: "low_quality_first",
+    title: "Piores lotes primeiro",
+    tag: "Giro crítico",
+    desc: "Tenta consumir primeiro os lotes com pior encaixe de qualidade, desde que a mistura final continue dentro dos limites.",
+    weights: "Mais peso para uso de lotes de menor qualidade, com penalidade forte para violações.",
+  },
+  {
+    id: "balanced",
+    title: "Balanceada",
+    tag: "Equilíbrio",
+    desc: "Distribui a decisão entre qualidade, giro de estoque, diversidade de produtores e aderência ao peso alvo.",
+    weights: "Pesos intermediários para cenários sem uma prioridade operacional dominante.",
+  },
+  {
+    id: "strict_quality_first",
+    title: "Qualidade conservadora",
+    tag: "Qualidade",
+    desc: "Prefere preservar margem de qualidade antes de buscar giro agressivo dos lotes ou proporcionalidade do estoque.",
+    weights: "Mais peso para qualidade e targets, reduzindo incentivo ao uso de lotes piores.",
+  },
+];
+
 export function PageConfig() {
   const {
     curStep,
@@ -116,17 +147,60 @@ export function PageConfig() {
               </span>
             </div>
           </div>
-          <div style={{ background: "var(--sf2)", border: "1px solid var(--bd)", borderRadius: "var(--r)", padding: 16 }}>
-            <label className="lbl">Prioridade da otimização</label>
-            <select
-              className="inp"
-              value={optimizationPriority}
-              onChange={(e) => setOptimizationPriority(e.target.value)}
-            >
-              <option value="strict_quality_first">Qualidade estrita</option>
-              <option value="balanced">Balanceada</option>
-              <option value="rotation_first">Giro de estoque</option>
-            </select>
+          <div style={{ gridColumn: "1 / -1", background: "var(--sf2)", border: "1px solid var(--bd)", borderRadius: "var(--r)", padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", marginBottom: 12 }}>
+              <div>
+                <label className="lbl">Estratégia de geração da mistura</label>
+                <div style={{ fontSize: 12, color: "var(--tx3)", marginTop: 4 }}>
+                  Escolha como a engine deve priorizar os lotes quando houver mais de uma mistura viável.
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+              {PRIORITY_OPTIONS.map((option) => {
+                const active = optimizationPriority === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setOptimizationPriority(option.id)}
+                    style={{
+                      textAlign: "left",
+                      background: active ? "rgba(34, 211, 238, 0.12)" : "var(--sf)",
+                      border: active ? "1px solid var(--cy)" : "1px solid var(--bd)",
+                      borderRadius: "var(--r)",
+                      padding: 14,
+                      color: "var(--tx)",
+                      cursor: "pointer",
+                      boxShadow: active ? "0 0 0 1px rgba(34, 211, 238, 0.18) inset" : "none",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                      <strong style={{ fontSize: 14 }}>{option.title}</strong>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          color: active ? "var(--cy)" : "var(--tx3)",
+                          border: `1px solid ${active ? "var(--cy)" : "var(--bd)"}`,
+                          borderRadius: 999,
+                          padding: "2px 7px",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {option.tag}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--tx2)", lineHeight: 1.45, marginBottom: 10 }}>
+                      {option.desc}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--tx3)", lineHeight: 1.4 }}>
+                      {option.weights}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>

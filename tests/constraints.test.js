@@ -28,6 +28,13 @@ test("checkViolations flags out-of-range params", () => {
   assert.ok(violations.some((v) => v.key === "mic"));
 });
 
+test("checkViolations ignores MST as a generation objective", () => {
+  const thresholds = buildDefaultThresholds();
+  const params = { uhml: 30, str_val: 31, elg: 5, ui: 83, mic: 4, sf: 8, mst: 99, mat: 0.86 };
+  const violations = checkViolations(params, thresholds);
+  assert.equal(violations.some((v) => v.key === "mst"), false);
+});
+
 test("weightedAverageExcludingZero ignores zero measures", () => {
   const lots = [
     { peso: 10, uhml: 30, str_val: 0, elg: 0, ui: 0, mic: 0, sf: 0, mst: 0, mat: 0, sci: 0 },

@@ -78,16 +78,6 @@ export function Sidebar({ collapsed, onToggleSidebar }: SidebarProps) {
             Parâmetros
           </span>
         </button>
-        <button
-          className={`sb-cfg-btn ${curPage === "rules" ? "active" : ""}`}
-          onClick={() => setCurPage("rules")}
-          title="Regras de Negócio"
-        >
-          <span style={{ fontSize: 14 }}>📘</span>
-          <span className="sb-cfg-txt" style={{ fontSize: 13, fontWeight: 600, color: "var(--tx2)" }}>
-            Regras
-          </span>
-        </button>
       </div>
       <div className="sb-hist">
         <div className="sb-section">Histórico</div>

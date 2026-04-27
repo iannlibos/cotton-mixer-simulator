@@ -17,6 +17,8 @@ export interface ObjectiveWeights {
   rotation: number;
   diversity: number;
   target: number;
+  lowQuality: number;
+  producerShare: number;
 }
 
 export function lotQualityScore(lot: Lot, thresholds: Thresholds): number {
@@ -50,6 +52,22 @@ export function buildObjectiveWeights(
       rotation: 0.4 * rotationFactor,
       diversity: 0.5,
       target: 1.8,
+      lowQuality: -1.2,
+      producerShare: 0.4,
+    };
+  }
+  if (priority === "low_quality_first") {
+    return {
+      weight: 1.0,
+      quality: 2.4,
+      producer: 1.2,
+      lotCount: 1.1,
+      minLot: 1.3,
+      rotation: 0.2 * rotationFactor,
+      diversity: 0.7,
+      target: 2.0,
+      lowQuality: 5.0,
+      producerShare: 0.6,
     };
   }
   if (priority === "balanced") {
@@ -62,17 +80,21 @@ export function buildObjectiveWeights(
       rotation: 1.0 * rotationFactor,
       diversity: 0.8,
       target: 2.0,
+      lowQuality: 0.8,
+      producerShare: 1.2,
     };
   }
   return {
     weight: 1.0,
-    quality: 1.5,
-    producer: 1.1,
+    quality: 2.0,
+    producer: 1.2,
     lotCount: 1.0,
     minLot: 1.1,
-    rotation: 2.0 * rotationFactor,
+    rotation: 0.8 * rotationFactor,
     diversity: 0.9,
     target: 2.0,
+    lowQuality: 0.6,
+    producerShare: 2.5,
   };
 }
 
@@ -116,6 +138,23 @@ export function objectiveScore(
     : 0;
   const rotationReward = -rotationMetric;
   const diversityReward = Object.keys(perProducer).length;
+  const lowQualityMetric = active.length
+    ? active.reduce((s, l) => s + (l.qScore || 0) * ((l.allocWeight || 0) / tw), 0)
+    : 0;
+
+  const stockWeight = mix.reduce((sum, l) => sum + Math.max(0, l.peso || 0), 0);
+  const stockByProducer: Record<string, number> = {};
+  mix.forEach((l) => {
+    stockByProducer[l.produtor] = (stockByProducer[l.produtor] || 0) + Math.max(0, l.peso || 0);
+  });
+  const producerShareDeviation =
+    stockWeight > 0 && tw > 0
+      ? Object.entries(stockByProducer).reduce((sum, [produtor, stockW]) => {
+          const expectedShare = stockW / stockWeight;
+          const actualShare = (perProducer[produtor] || 0) / tw;
+          return sum + Math.abs(actualShare - expectedShare) * 100;
+        }, 0)
+      : 0;
 
   let targetPenalty = 0;
   if (targetValues) {
@@ -135,7 +174,9 @@ export function objectiveScore(
     minLotPenalty * objectiveWeights.minLot +
     targetPenalty * objectiveWeights.target +
     rotationReward * objectiveWeights.rotation +
-    -diversityReward * objectiveWeights.diversity
+    -diversityReward * objectiveWeights.diversity +
+    lowQualityMetric * objectiveWeights.lowQuality +
+    producerShareDeviation * objectiveWeights.producerShare
   );
 }
 

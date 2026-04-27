@@ -15,8 +15,6 @@ export const PARAMS: ParamDef[] = [
   { key: "ui", label: "UI", good: true, defMin: 81.0, defMax: 85.0, prec: 1 },
   { key: "mic", label: "MIC", good: false, defMin: 3.8, defMax: 4.5, prec: 2 },
   { key: "sf", label: "SF", good: false, defMin: 7.0, defMax: 10.0, prec: 2 },
-  { key: "mst", label: "MST", good: false, defMin: 5.0, defMax: 8.0, prec: 1 },
-  { key: "mat", label: "MAT", good: true, defMin: 0.85, defMax: 0.88, prec: 3 },
 ];
 
 export const ALL_KEYS = ["uhml", "str_val", "elg", "ui", "mic", "sf", "mst", "mat", "sci"];
@@ -44,8 +42,6 @@ export const TARGET_RANGES: Record<string, number> = {
   ui: 4,
   mic: 0.6,
   sf: 3,
-  mst: 3,
-  mat: 0.03,
 };
 
 export const TARGET_TOL: Record<string, number> = {
@@ -55,8 +51,6 @@ export const TARGET_TOL: Record<string, number> = {
   ui: 1,
   mic: 0.2,
   sf: 0.6,
-  mst: 0.6,
-  mat: 0.01,
 };
 
 export type Thresholds = Record<string, { min: number; max: number }>;

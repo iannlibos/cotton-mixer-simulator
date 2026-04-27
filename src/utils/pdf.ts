@@ -583,7 +583,7 @@ function drawQualityChips(
   sp: Record<string, number>,
   thresholds: Thresholds,
 ): number {
-  const paramKeys = ["uhml", "str_val", "elg", "ui", "mic", "sf", "mst"] as const;
+  const paramKeys = ["uhml", "str_val", "elg", "ui", "mic", "sf"] as const;
   const chipGap = 3;
   const chipW = (innerW - 3 * chipGap) / 4;
   // Altura apertada (era 13) para liberar espaço vertical ao layout físico

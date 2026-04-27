@@ -56,23 +56,36 @@ export function PageStep3() {
   const wMatch = params ? Math.abs(params.weight - targetWeight) <= Math.max(0.01, wTol) : false;
 
   const avgStockCost = stock.length ? weightedAverage(stock, "custo", "peso") : 0;
+  const stockBeforeTotal = stock.reduce((s, r) => s + r.peso, 0);
+  const allocatedTotal = currentMix.reduce((s, l) => s + (l.allocWeight || 0), 0);
+  const stockAfterTotal = Math.max(0, stockBeforeTotal - allocatedTotal);
+  const sharePct = (value: number, total: number) => (total > 0 ? (value / total) * 100 : 0);
+  const fmtShare = (value: number, total: number) => `${sharePct(value, total).toFixed(1)}%`;
+  const allocationByLotId = new Map(currentMix.map((m) => [m.id, m.allocWeight || 0]));
 
   const availData = stockForMixture.filter((s) => !currentMix.some((m) => m.id === s.id));
 
   const deltaData = stock.map((r) => {
-    const a = currentMix.find((m) => m.id === r.id);
-    const alloc = a?.allocWeight || 0;
+    const alloc = allocationByLotId.get(r.id) || 0;
     return { ...r, alloc, after: r.peso - alloc };
   });
 
-  const byP: Record<string, { before: number; after: number }> = {};
-  stock.forEach((r) => {
-    if (!byP[r.produtor]) byP[r.produtor] = { before: 0, after: 0 };
-    const alloc = currentMix.find((m) => m.id === r.id)?.allocWeight || 0;
+  const byP: Record<string, { before: number; after: number; alloc: number }> = {};
+  deltaData.forEach((r) => {
+    if (!byP[r.produtor]) byP[r.produtor] = { before: 0, after: 0, alloc: 0 };
     byP[r.produtor].before += r.peso;
-    byP[r.produtor].after += r.peso - alloc;
+    byP[r.produtor].after += r.after;
+    byP[r.produtor].alloc += r.alloc;
   });
   const chartLabels = Object.keys(byP);
+  const producerParticipationRows = chartLabels
+    .map((produtor) => {
+      const row = byP[produtor];
+      const beforePct = sharePct(row.before, stockBeforeTotal);
+      const afterPct = sharePct(row.after, stockAfterTotal);
+      return { produtor, ...row, beforePct, afterPct, deltaPp: afterPct - beforePct };
+    })
+    .sort((a, b) => b.before - a.before);
   const chartData = {
     labels: chartLabels,
     datasets: [
@@ -90,12 +103,12 @@ export function PageStep3() {
     },
   };
 
-  const tw = currentMix.reduce((s, l) => s + (l.allocWeight || 0), 0);
+  const tw = allocatedTotal;
 
   const [mixSort, setMixSort] = useState<{ key: string; asc: boolean } | null>(null);
   const [availSort, setAvailSort] = useState<{ key: string; asc: boolean } | null>(null);
-  /** Padrão: alocação (ton) decrescente — onde mais se consome estoque. */
-  const [deltaSort, setDeltaSort] = useState<{ key: string; asc: boolean }>({ key: "alloc", asc: false });
+  /** Padrão: percentual consumido do lote decrescente — onde a mistura mais concentra retirada. */
+  const [deltaSort, setDeltaSort] = useState<{ key: string; asc: boolean }>({ key: "deltaPct", asc: false });
 
   const mixGetters = useMemo((): Record<string, SortColumn<Lot>> => {
     const g: Record<string, SortColumn<Lot>> = {
@@ -153,9 +166,11 @@ export function PageStep3() {
       antes: { get: (r) => r.peso, numeric: true },
       alloc: { get: (r) => r.alloc, numeric: true },
       after: { get: (r) => r.after, numeric: true },
+      lotPctBefore: { get: (r) => sharePct(r.peso, stockBeforeTotal), numeric: true },
+      lotPctAfter: { get: (r) => sharePct(r.after, stockAfterTotal), numeric: true },
       deltaPct: { get: (r) => (r.peso > 0 ? (r.alloc / r.peso) * 100 : 0), numeric: true },
     }),
-    []
+    [stockAfterTotal, stockBeforeTotal]
   );
 
   const sortedDelta = useMemo(
@@ -525,15 +540,16 @@ export function PageStep3() {
       <div className="card">
         <div className="card-h">Variação do Estoque após Mistura</div>
         <div className="card-sub" style={{ lineHeight: 1.5, maxWidth: 900 }}>
-          Use os cabeçalhos para ordenar. Padrão: <strong>alocação (ton) decrescente</strong> — veja antes onde a mistura
-          mais puxa do estoque. O gráfico abaixo compara, por produtor, massa no estoque antes e depois.
+          Use os cabeçalhos para ordenar. Padrão: <strong>Δ% do lote decrescente</strong> — veja antes onde a mistura
+          consome proporcionalmente mais de cada lote. As colunas de participação mostram quanto cada produtor-lote
+          representava no estoque antes e passa a representar depois da mistura.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
           {[
-            { l: "Antes (total estoque)", v: stock.reduce((s, r) => s + r.peso, 0).toFixed(1) + " ton", c: "var(--tx)" },
-            { l: "Alocado na mistura", v: currentMix.reduce((s, l) => s + (l.allocWeight || 0), 0).toFixed(2) + " ton", c: "var(--am)" },
-            { l: "Depois (restante)", v: (stock.reduce((s, r) => s + r.peso, 0) - currentMix.reduce((s, l) => s + (l.allocWeight || 0), 0)).toFixed(1) + " ton", c: "var(--cy)" },
-            { l: "Consumo do estoque", v: ((currentMix.reduce((s, l) => s + (l.allocWeight || 0), 0) / Math.max(0.001, stock.reduce((s, r) => s + r.peso, 0))) * 100).toFixed(1) + "%", c: "var(--rd)" },
+            { l: "Antes (total estoque)", v: stockBeforeTotal.toFixed(1) + " ton", c: "var(--tx)" },
+            { l: "Alocado na mistura", v: allocatedTotal.toFixed(2) + " ton", c: "var(--am)" },
+            { l: "Depois (restante)", v: stockAfterTotal.toFixed(1) + " ton", c: "var(--cy)" },
+            { l: "Consumo do estoque", v: fmtShare(allocatedTotal, stockBeforeTotal), c: "var(--rd)" },
           ].map((k) => (
             <div key={k.l} style={{ background: "var(--sf2)", border: "1px solid var(--bd)", borderRadius: "var(--r)", padding: 10, textAlign: "center" }}>
               <div style={{ fontSize: 9, fontWeight: 700, color: "var(--tx3)", textTransform: "uppercase", lineHeight: 1.2 }}>{k.l}</div>
@@ -552,6 +568,8 @@ export function PageStep3() {
                 <th onClick={() => handleDeltaSort("antes")}>Antes (ton){sortMark(deltaSort, "antes")}</th>
                 <th onClick={() => handleDeltaSort("alloc")}>Alocado (ton){sortMark(deltaSort, "alloc")}</th>
                 <th onClick={() => handleDeltaSort("after")}>Depois (ton){sortMark(deltaSort, "after")}</th>
+                <th onClick={() => handleDeltaSort("lotPctBefore")}>% lote antes{sortMark(deltaSort, "lotPctBefore")}</th>
+                <th onClick={() => handleDeltaSort("lotPctAfter")}>% lote depois{sortMark(deltaSort, "lotPctAfter")}</th>
                 <th onClick={() => handleDeltaSort("deltaPct")}>Δ% do lote{sortMark(deltaSort, "deltaPct")}</th>
               </tr>
             </thead>
@@ -563,8 +581,39 @@ export function PageStep3() {
                   <td className="mono">{r.peso.toFixed(2)}</td>
                   <td className={`mono ${r.alloc > 0 ? "delta-neg" : ""}`}>{r.alloc > 0 ? r.alloc.toFixed(2) : "—"}</td>
                   <td className="mono">{r.after.toFixed(2)}</td>
+                  <td className="mono">{fmtShare(r.peso, stockBeforeTotal)}</td>
+                  <td className="mono">{fmtShare(r.after, stockAfterTotal)}</td>
                   <td className={`mono ${r.alloc > 0 ? "delta-neg" : ""}`}>
                     {r.alloc > 0 && r.peso > 0 ? ((r.alloc / r.peso) * 100).toFixed(0) + "%" : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="card-sub" style={{ marginBottom: 8 }}>Participação por produtor no estoque</div>
+        <div className="tbl-scroll" style={{ maxHeight: 260, marginBottom: 18 }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", paddingLeft: 12 }}>Produtor</th>
+                <th>Antes (ton)</th>
+                <th>% antes</th>
+                <th>Depois (ton)</th>
+                <th>% depois</th>
+                <th>Δ p.p.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {producerParticipationRows.map((r) => (
+                <tr key={r.produtor}>
+                  <td style={{ textAlign: "left", paddingLeft: 12 }}>{r.produtor}</td>
+                  <td className="mono">{r.before.toFixed(2)}</td>
+                  <td className="mono">{r.beforePct.toFixed(1)}%</td>
+                  <td className="mono">{r.after.toFixed(2)}</td>
+                  <td className="mono">{r.afterPct.toFixed(1)}%</td>
+                  <td className={`mono ${r.deltaPp < 0 ? "delta-neg" : r.deltaPp > 0 ? "delta-pos" : ""}`}>
+                    {r.deltaPp > 0 ? "+" : ""}{r.deltaPp.toFixed(1)}
                   </td>
                 </tr>
               ))}

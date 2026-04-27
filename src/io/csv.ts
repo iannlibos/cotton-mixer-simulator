@@ -15,14 +15,18 @@ const PARAM_CSV_KEYS: Record<string, string> = {
   mat: "MAT",
 };
 
-function rowHasFullHviMeasures(row: Record<string, unknown>, hmap: Record<string, string>): boolean {
+function missingRequiredHviFields(row: Record<string, unknown>, hmap: Record<string, string>): string[] {
+  const missing: string[] = [];
   for (const p of PARAMS) {
     const field = PARAM_CSV_KEYS[p.key];
-    if (!field) return false;
+    if (!field) {
+      missing.push(p.label);
+      continue;
+    }
     const raw = parseNumber(getField(row, field, hmap));
-    if (raw == null || raw === 0) return false;
+    if (raw == null || raw === 0) missing.push(p.label);
   }
-  return true;
+  return missing;
 }
 
 const REQUIRED_COLUMNS = ["PRODUTOR", "LOTE", "PESO"];
@@ -110,6 +114,8 @@ function validateRanges(lot: Lot): string[] {
     ["MST", lot.mst, 2, 15],
   ];
   checks.forEach(([k, v, min, max]) => {
+    if (k === "MAT" && (v == null || v === 0)) return;
+    if (k === "MST" && (v == null || v === 0)) return;
     if (v != null && (v < min || v > max)) {
       warnings.push(`${k} fora de faixa plausível (${v}).`);
     }
@@ -191,10 +197,11 @@ export function parseStockRows(rows: Record<string, unknown>[]): ParseResult {
 
     const custoRaw = parseNumber(getField(row, "CUSTO", hmap)) || 0;
     const pesoTon = +peso.toFixed(2);
-    const hviComplete = rowHasFullHviMeasures(row, hmap);
+    const missingHvi = missingRequiredHviFields(row, hmap);
+    const hviComplete = missingHvi.length === 0;
     if (!hviComplete) {
       warnings.push(
-        `Linha ${i}: medidas HVI incompletas ou zeradas; lote fica no estoque mas é ignorado na geração de misturas até haver dados.`,
+        `Linha ${i}: medidas obrigatórias incompletas ou zeradas (${missingHvi.join(", ")}); lote fica no estoque mas é ignorado na geração de misturas até haver dados.`,
       );
     }
 

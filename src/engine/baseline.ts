@@ -1,9 +1,18 @@
 import { PARAMS, type Thresholds, roundParamLimit } from "../domain/types.js";
 import type { Lot } from "../domain/stock.js";
 
-/** Lotes utilizáveis na engine: exclui apenas os marcados como sem HVI completo no import. */
+export function missingRequiredHviParams(lot: Lot): string[] {
+  return PARAMS
+    .filter((p) => {
+      const v = lot[p.key as keyof Lot] as number;
+      return !Number.isFinite(v) || v === 0;
+    })
+    .map((p) => p.label);
+}
+
+/** Lotes utilizáveis na engine: recalcula os parâmetros obrigatórios atuais. */
 export function isLotUsableForOptimization(lot: Lot): boolean {
-  return lot.hviComplete !== false;
+  return missingRequiredHviParams(lot).length === 0;
 }
 
 export function filterUsableLots(lots: Lot[]): Lot[] {

@@ -819,6 +819,10 @@ select {
   color: var(--rd);
 }
 
+.delta-pos {
+  color: var(--gn);
+}
+
 .step-bar {
   display: flex;
   align-items: center;

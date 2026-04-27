@@ -6,7 +6,6 @@ import { PageStep3 } from "./components/PageStep3";
 import { PageConfig } from "./components/PageConfig";
 import { PageHist } from "./components/PageHist";
 import { PageSeq } from "./components/PageSeq";
-import { PageRules } from "./components/PageRules";
 import { useApp } from "./context/AppContext";
 
 const SB_COLLAPSE_KEY = "ntx_sidebar_collapsed";
@@ -45,7 +44,6 @@ function App() {
         {curPage === "config" && <PageConfig />}
         {curPage === "hist" && <PageHist />}
         {curPage === "seq" && <PageSeq />}
-        {curPage === "rules" && <PageRules />}
       </main>
     </div>
   );

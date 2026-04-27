@@ -93,7 +93,7 @@ interface AppState {
   currentMix: Lot[];
   history: HistoryRecord[];
   curStep: number;
-  curPage: "step1" | "step2" | "step3" | "config" | "hist" | "seq" | "rules";
+  curPage: "step1" | "step2" | "step3" | "config" | "hist" | "seq";
   thresholds: Thresholds;
   rules: EngineRules;
   optimizationPriority: string;

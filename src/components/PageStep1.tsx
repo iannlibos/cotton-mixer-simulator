@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../context/AppContext";
 import { PARAMS } from "../domain/types";
-import { isLotUsableForOptimization } from "../engine/baseline";
+import { isLotUsableForOptimization, missingRequiredHviParams } from "../engine/baseline";
 import { weightedAverageExcludingZero } from "../engine/constraints";
 import { fmtBRL } from "../engine/sequencer";
 import type { Lot } from "../domain/stock";
@@ -140,6 +140,7 @@ export function PageStep1() {
       ui: { get: (r) => r.ui, numeric: true },
       mic: { get: (r) => r.mic, numeric: true },
       sf: { get: (r) => r.sf, numeric: true },
+      mat: { get: (r) => r.mat, numeric: true },
       mst: { get: (r) => r.mst, numeric: true },
       sci: { get: (r) => r.sci, numeric: true },
     };
@@ -211,7 +212,7 @@ export function PageStep1() {
             Arraste o CSV aqui ou clique para selecionar
           </div>
           <div style={{ fontSize: 13, color: "var(--tx3)" }}>
-            Aceita: FORNECEDOR/PRODUTOR, LOTE, FARDOS, TAMANHO (P/G), TOTAL(kg)/PESO(ton), STR, UHML (mm ou in; convertido para mm), UI, MIC, SF, ELG, MST, SCI, CUSTO
+            Aceita: FORNECEDOR/PRODUTOR, LOTE, FARDOS, TAMANHO (P/G), TOTAL(kg)/PESO(ton), STR, UHML (mm ou in; convertido para mm), UI, MIC, SF, ELG, MAT opcional, MST opcional, SCI, CUSTO
           </div>
           <button className="btn btn-p" style={{ marginTop: 16 }}>
             Selecionar Arquivo
@@ -445,6 +446,7 @@ export function PageStep1() {
                   <th onClick={() => handleStockSort("ui")}>UI{sortMark(stockSort, "ui")}</th>
                   <th onClick={() => handleStockSort("mic")}>MIC{sortMark(stockSort, "mic")}</th>
                   <th onClick={() => handleStockSort("sf")}>SF{sortMark(stockSort, "sf")}</th>
+                  <th onClick={() => handleStockSort("mat")}>MAT{sortMark(stockSort, "mat")}</th>
                   <th onClick={() => handleStockSort("mst")}>MST{sortMark(stockSort, "mst")}</th>
                   <th onClick={() => handleStockSort("sci")}>SCI{sortMark(stockSort, "sci")}</th>
                 </tr>
@@ -452,6 +454,7 @@ export function PageStep1() {
               <tbody>
                 {sortedStock.map((r) => {
                   const eligible = isLotUsableForOptimization(r);
+                  const missingHvi = eligible ? [] : missingRequiredHviParams(r);
                   return (
                   <tr
                     key={r.id}
@@ -471,7 +474,7 @@ export function PageStep1() {
                         title={
                           eligible
                             ? "Incluir na mistura"
-                            : "HVI incompleto — lote não pode compor a mistura até o laboratório concluir as medidas"
+                            : `Dados obrigatórios pendentes: ${missingHvi.join(", ")}`
                         }
                         aria-label={`Incluir lote ${r.lote} na mistura`}
                       />
@@ -509,6 +512,7 @@ export function PageStep1() {
                     <td className={`mono ${isWarn("ui", r.ui) ? "cell-warn" : ""}`}>{fmtParam("ui", r.ui)}</td>
                     <td className={`mono ${isWarn("mic", r.mic) ? "cell-warn" : ""}`}>{fmtParam("mic", r.mic)}</td>
                     <td className={`mono ${isWarn("sf", r.sf) ? "cell-warn" : ""}`}>{fmtParam("sf", r.sf)}</td>
+                    <td className={`mono ${isWarn("mat", r.mat) ? "cell-warn" : ""}`}>{fmtParam("mat", r.mat)}</td>
                     <td className={`mono ${isWarn("mst", r.mst) ? "cell-warn" : ""}`}>{fmtParam("mst", r.mst)}</td>
                     <td className="mono" style={{ color: "var(--tx3)" }}>{fmtParam("sci", r.sci)}</td>
                   </tr>
