@@ -17,6 +17,7 @@ export function PageStep2() {
     setTargetWeight,
     setMixName,
     runStrategies,
+    relaxSuggestionAndRun,
     selectSuggestion,
     hasCostData,
   } = useApp();
@@ -114,8 +115,15 @@ export function PageStep2() {
           {suggestions.map((s, i) => {
             const p = s.params;
             const v = s.violations;
-            const nProds = [...new Set(s.lots.map((l) => l.produtor))].length;
             const wMatch = Math.abs(p.weight - targetWeight) <= Math.max(0.01, targetWeight * 0.005);
+            const convergence = s.convergence;
+            const convergenceOk = convergence?.feasible ?? (wMatch && v.length === 0);
+            const firstDiagnostic = convergence?.diagnostics[0];
+            const objectiveOnlyDiagnostic = convergence?.diagnostics.find((item) => item.code === "OBJECTIVE_ONLY_MODE");
+            const showConvergenceAlert = !convergenceOk || objectiveOnlyDiagnostic;
+            const partialRelaxation = convergence?.relaxations.find((item) => item.mode === "partial");
+            const objectiveOnlyRelaxation = convergence?.relaxations.find((item) => item.mode === "objective_only");
+            const nProds = [...new Set(s.lots.map((l) => l.produtor))].length;
             const costVsAvg = p.custoTon > avgCusto
               ? `↑ ${fmtBRL(p.custoTon - avgCusto)} acima`
               : `↓ ${fmtBRL(avgCusto - p.custoTon)} abaixo`;
@@ -126,7 +134,7 @@ export function PageStep2() {
                 className={`sug-card${i === 0 ? " best" : ""}`}
                 onClick={() => selectSuggestion(i)}
               >
-                {i === 0 && !s.strategy.id.startsWith("solver_") && (
+                {i === 0 && convergenceOk && !objectiveOnlyDiagnostic && v.length === 0 && !s.strategy.id.startsWith("solver_") && (
                   <div className="sug-tag" style={{ background: "var(--cy)", color: "var(--bg)" }}>
                     Recomendada
                   </div>
@@ -186,6 +194,44 @@ export function PageStep2() {
                     {v.length === 0 ? "✓ OK" : `${v.length} violação${v.length > 1 ? "ões" : ""}`}
                   </span>
                 </div>
+
+                {showConvergenceAlert && (
+                  <div className="alert alert-warn" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.45 }}>
+                    <strong>{convergenceOk ? "Peso priorizado." : "Não convergiu."}</strong>{" "}
+                    {convergenceOk
+                      ? objectiveOnlyDiagnostic?.message
+                      : convergence?.reasons.length ? convergence.reasons.join(" ") : "A engine parou fora das regras."}
+                    {convergenceOk
+                      ? objectiveOnlyDiagnostic ? ` ${objectiveOnlyDiagnostic.suggestion}` : ""
+                      : firstDiagnostic ? ` ${firstDiagnostic.message} ${firstDiagnostic.suggestion}` : ""}
+                    {partialRelaxation ? (
+                      <button
+                        type="button"
+                        className="btn btn-amber btn-sm"
+                        style={{ width: "100%", marginTop: 8 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void relaxSuggestionAndRun(i, "partial");
+                        }}
+                      >
+                        Permitir restrição e gerar novamente
+                      </button>
+                    ) : null}
+                    {objectiveOnlyRelaxation ? (
+                      <button
+                        type="button"
+                        className="btn btn-s btn-sm"
+                        style={{ width: "100%", marginTop: 6 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void relaxSuggestionAndRun(i, "objective_only");
+                        }}
+                      >
+                        Garantir apenas peso alvo
+                      </button>
+                    ) : null}
+                  </div>
+                )}
 
                 <div style={{ marginTop: 12, textAlign: "center" }}>
                   <button

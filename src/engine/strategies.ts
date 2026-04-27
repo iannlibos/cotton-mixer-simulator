@@ -1,7 +1,6 @@
 import { PARAMS } from "../domain/types.js";
 import type { Lot, MixParams } from "../domain/stock.js";
-import type { Thresholds } from "../domain/types.js";
-import type { EngineRules } from "../domain/types.js";
+import type { EngineRules, Thresholds } from "../domain/types.js";
 import { ALL_KEYS } from "../domain/types.js";
 import {
   baleWeight,
@@ -30,6 +29,16 @@ export interface StrategyResult {
   params: MixParams;
   violations: ReturnType<typeof checkViolations>;
   elapsed: number;
+  convergence?: {
+    feasible: boolean;
+    reasons: string[];
+    diagnostics: Array<{ code: string; message: string; suggestion: string }>;
+    relaxations: Array<{
+      mode: "partial" | "objective_only";
+      label: string;
+      updates: Partial<EngineRules>;
+    }>;
+  };
 }
 
 function qualityIndex(l: Lot, thresholds: Thresholds): number {

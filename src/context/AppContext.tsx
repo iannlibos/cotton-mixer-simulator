@@ -33,6 +33,88 @@ function stockForMix(stock: Lot[], excludedFromMixIds: number[]): Lot[] {
   return stock.filter((l) => isLotUsableForOptimization(l) && !ex.has(l.id));
 }
 
+function formatPct(value: number): string {
+  return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}%`;
+}
+
+type RunStrategyOptions = {
+  rulesOverride?: EngineRules;
+  thresholdsOverride?: Thresholds;
+  objectiveOnly?: boolean;
+};
+
+function buildObjectiveOnlyThresholds(): Thresholds {
+  return Object.fromEntries(
+    PARAMS.map((param) => [param.key, { min: Number.NEGATIVE_INFINITY, max: Number.POSITIVE_INFINITY }]),
+  ) as Thresholds;
+}
+
+function buildConvergenceFeedback(
+  result: OptimizerResult,
+  params: MixParams,
+  targetWeight: number,
+  rules: EngineRules,
+  usableLotsCount: number,
+  objectiveOnly = false,
+): StrategyResult["convergence"] {
+  const best = result.best;
+  const reasons = best?.reasons ?? [];
+  const diagnostics = [...(result.diagnostics ?? [])];
+  const weightGapPct = targetWeight > 0 ? (Math.abs(params.weight - targetWeight) / targetWeight) * 100 : 0;
+
+  if (objectiveOnly) {
+    diagnostics.push({
+      code: "OBJECTIVE_ONLY_MODE",
+      message: "Geração feita com restrições totalmente flexibilizadas.",
+      suggestion: "Use esta mistura apenas quando o objetivo principal for bater o peso; revise qualidade e composição antes de salvar.",
+    });
+  }
+
+  if (!best?.feasible && reasons.some((reason) => reason.includes("Peso fora"))) {
+    const direction = params.weight < targetWeight ? "abaixo" : "acima";
+    diagnostics.push({
+      code: "WEIGHT_CONVERGENCE_FAILED",
+      message: `A engine parou ${direction} do peso alvo (${formatPct(weightGapPct)} de diferença).`,
+      suggestion:
+        params.weight < targetWeight
+          ? "As regras de participação podem estar impedindo adicionar mais lotes/fardos sem violar produtor, lote mínimo ou máximo de lotes."
+          : "A granulação dos fardos e as regras atuais impedem aparar a mistura sem sair das restrições.",
+    });
+  }
+
+  const relaxations: NonNullable<StrategyResult["convergence"]>["relaxations"] = [];
+  if (!objectiveOnly && !best?.feasible && params.weight < targetWeight) {
+    const nextMaxProdPct = Math.min(100, rules.maxProdPct + 10);
+    const nextMinLotPct = Math.max(1, rules.minLotPct - 2);
+    const nextMaxLots = rules.maxLots + 4;
+    relaxations.push({
+      mode: "partial",
+      label: `Relaxar preenchimento: produtor até ${formatPct(nextMaxProdPct)}, lote mín. ${formatPct(nextMinLotPct)}, máx. ${nextMaxLots} lotes`,
+      updates: {
+        maxProdPct: nextMaxProdPct,
+        minLotPct: nextMinLotPct,
+        maxLots: nextMaxLots,
+      },
+    });
+    relaxations.push({
+      mode: "objective_only",
+      label: "Flexibilizar tudo e buscar apenas o peso alvo",
+      updates: {
+        maxProdPct: 100,
+        minLotPct: 0,
+        maxLots: Math.max(usableLotsCount, rules.maxLots),
+      },
+    });
+  }
+
+  return {
+    feasible: best?.feasible ?? false,
+    reasons,
+    diagnostics,
+    relaxations,
+  };
+}
+
 function loadFromStorage<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -171,7 +253,8 @@ interface AppContextValue extends AppState {
   setQualityBinBreakpoints: (paramKey: string, breakpoints: number[]) => void;
   resetQualityBinBreakpoints: (paramKey: string) => void;
   runEngine: (targetWeight: number) => Promise<void>;
-  runStrategies: (targetWeight: number) => Promise<void>;
+  runStrategies: (targetWeight: number, options?: RunStrategyOptions) => Promise<void>;
+  relaxSuggestionAndRun: (idx: number, mode: "partial" | "objective_only") => Promise<void>;
   selectSuggestion: (idx: number) => void;
   runWithTargets: (targetWeight: number) => Promise<void>;
   applyAlternative: (idx: number) => void;
@@ -417,9 +500,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setTargetWeight = useCallback((w: number) => setState((s) => ({ ...s, targetWeight: w })), []);
   const setMixName = useCallback((n: string) => setState((s) => ({ ...s, mixName: n })), []);
 
-  const runStrategies = useCallback(async (targetWeight: number) => {
+  const runStrategies = useCallback(async (targetWeight: number, options: RunStrategyOptions = {}) => {
     const snap = stateRef.current;
     const mixStock = stockForMix(snap.stock, snap.excludedFromMixIds);
+    const effectiveRules = options.rulesOverride ?? snap.rules;
+    const effectiveThresholds = options.thresholdsOverride ?? snap.thresholds;
     if (!mixStock.length) return;
     if (!filterUsableLots(mixStock).length) {
       alert(
@@ -440,8 +525,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const solverInput = {
         stock: mixStock,
         targetWeight,
-        thresholds: snap.thresholds,
-        rules: snap.rules,
+        thresholds: effectiveThresholds,
+        rules: effectiveRules,
         priority: snap.optimizationPriority,
         seed: Date.now(),
       };
@@ -472,6 +557,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           params: classicOpt.best.params,
           violations: checkViolations(classicOpt.best.params, snap.thresholds),
           elapsed: classicElapsed,
+          convergence: buildConvergenceFeedback(
+            classicOpt,
+            classicOpt.best.params,
+            targetWeight,
+            effectiveRules,
+            mixStock.length,
+            options.objectiveOnly,
+          ),
         };
       }
       setState((s) => ({ ...s, generationProgress: 20 }));
@@ -513,6 +606,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           params: mcResult.best.params,
           violations: checkViolations(mcResult.best.params, snap.thresholds),
           elapsed: mcElapsed,
+          convergence: buildConvergenceFeedback(
+            mcResult,
+            mcResult.best.params,
+            targetWeight,
+            effectiveRules,
+            mixStock.length,
+            options.objectiveOnly,
+          ),
         };
         const classicScore = classicOpt.best?.score ?? null;
         const solverScore = mcResult.best.score;
@@ -557,6 +658,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           params: saResult.best.params,
           violations: checkViolations(saResult.best.params, snap.thresholds),
           elapsed: saElapsed,
+          convergence: buildConvergenceFeedback(
+            saResult,
+            saResult.best.params,
+            targetWeight,
+            effectiveRules,
+            mixStock.length,
+            options.objectiveOnly,
+          ),
         };
         const classicScore = classicOpt.best?.score ?? null;
         const solverScore = saResult.best.score;
@@ -615,8 +724,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const relaxSuggestionAndRun = useCallback(async (idx: number, mode: "partial" | "objective_only") => {
+    const snap = stateRef.current;
+    const suggestion = snap.suggestions[idx];
+    const relaxation = suggestion?.convergence?.relaxations.find((item) => item.mode === mode);
+    if (!suggestion || !relaxation) return;
+
+    const reasons = suggestion.convergence?.reasons.length
+      ? suggestion.convergence.reasons.join(" ")
+      : "A engine não conseguiu cumprir todas as restrições.";
+    const objectiveOnly = mode === "objective_only";
+    const ok = window.confirm(
+      `${suggestion.strategy.name} não convergiu com as regras atuais.\n\n` +
+        `${reasons}\n\n` +
+        `${objectiveOnly ? "Deseja flexibilizar totalmente as restrições apenas para esta geração?\n\n" : "Deseja permitir passar por essa restrição e gerar novamente?\n\n"}` +
+        `${relaxation.label}`,
+    );
+    if (!ok) return;
+
+    const nextRules = { ...snap.rules, ...relaxation.updates };
+    if (objectiveOnly) {
+      await runStrategies(snap.targetWeight, {
+        rulesOverride: nextRules,
+        thresholdsOverride: buildObjectiveOnlyThresholds(),
+        objectiveOnly: true,
+      });
+      return;
+    }
+
+    saveToStorage("ntx_rules", nextRules);
+    stateRef.current = { ...snap, rules: nextRules };
+    setState((s) => ({ ...s, rules: nextRules }));
+    await runStrategies(snap.targetWeight, { rulesOverride: nextRules });
+  }, [runStrategies]);
+
   const selectSuggestion = useCallback(
     (idx: number) => {
+      const current = stateRef.current.suggestions[idx];
+      const objectiveOnly = current?.convergence?.diagnostics.some((item) => item.code === "OBJECTIVE_ONLY_MODE");
+      if (current?.convergence && (!current.convergence.feasible || objectiveOnly)) {
+        const ok = window.confirm(
+          `${current.strategy.name} ${objectiveOnly ? "foi gerada priorizando apenas o peso alvo." : "não convergiu com as regras atuais."}\n\n` +
+            `${objectiveOnly ? "As restrições foram flexibilizadas somente nesta geração." : current.convergence.reasons.join(" ") || "A engine parou fora das regras."}\n\n` +
+            "Deseja selecionar essa mistura mesmo assim?",
+        );
+        if (!ok) return;
+      }
       setState((s) => {
         const sug = s.suggestions[idx];
         if (!sug) return s;
@@ -933,6 +1086,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       resetQualityBinBreakpoints,
       runEngine,
       runStrategies,
+      relaxSuggestionAndRun,
       selectSuggestion,
       runWithTargets,
       applyAlternative,
@@ -978,6 +1132,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       resetQualityBinBreakpoints,
       runEngine,
       runStrategies,
+      relaxSuggestionAndRun,
       selectSuggestion,
       runWithTargets,
       applyAlternative,

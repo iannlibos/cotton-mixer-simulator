@@ -276,7 +276,7 @@ function LayoutCanvas({
 export function PageSeq() {
   const { seqHistRecord, thresholds, setCurStep, viewHistory, history } = useApp();
 
-  const [seqWeight, setSeqWeight] = useState(9000);
+  const [seqWeight, setSeqWeight] = useState(26000);
   const [minProds, setMinProds] = useState(3);
   const [sequences, setSequences] = useState<SeqSide[]>([]);
   const [baleWtKg, setBaleWtKg] = useState(0);
@@ -573,7 +573,7 @@ export function PageSeq() {
         <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
           <div>
             <label className="lbl">Peso por Sequência (kg)</label>
-            <input type="number" className="inp inp-num" value={seqWeight} min={500} step={500} style={{ width: 130 }} onChange={(e) => setSeqWeight(parseInt(e.target.value) || 9000)} />
+            <input type="number" className="inp inp-num" value={seqWeight} min={500} step={500} style={{ width: 130 }} onChange={(e) => setSeqWeight(parseInt(e.target.value) || 26000)} />
           </div>
           <div>
             <label className="lbl">Mín. Produtores / Seq</label>

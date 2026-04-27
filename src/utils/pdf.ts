@@ -1,6 +1,13 @@
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
 import type { Lot, MixParams } from "@/domain/stock";
+import {
+  BALE_G_LENGTH_M,
+  BALE_P_LENGTH_M,
+  BALE_WIDTH_M,
+  OPENING_AREA_LENGTH_M,
+  OPENING_AREA_WIDTH_M,
+} from "@/domain/stock";
 import { PARAMS, buildDefaultThresholds, type Thresholds } from "@/domain/types";
 import {
   computeSeqParams,
@@ -23,11 +30,7 @@ declare module "jspdf" {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Paleta de impressão P&B                                                   */
-/*                                                                            */
-/*  Todo o PDF é pensado para impressora monocromática: fundos claros, tinta  */
-/*  escura, reforço por **peso/grayscale** e não por matiz. Nenhuma informação*/
-/*  depende exclusivamente de cor.                                            */
+/*  Paleta de impressão P&B: fundo branco, texto escuro, cinzas nos fardos.   */
 /* -------------------------------------------------------------------------- */
 
 type RGB = [number, number, number];
@@ -364,20 +367,18 @@ function drawBale(
   const band = iqBand(iq);
   setFill(doc, band.fill);
   setDraw(doc, band.border);
-  doc.setLineWidth(band.borderW);
+  doc.setLineWidth(Math.max(band.borderW, pw * 0.015));
   doc.rect(px, py, pw, ph, "FD");
 
-  // Letra-classe no canto superior esquerdo (E/B/R/F). Reforço redundante
-  // ao tom — permanece legível mesmo se a impressora achatar os cinzas.
   if (pw >= 6 && ph >= 5.5) {
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
+    doc.setFontSize(Math.min(8, ph * 0.14));
     setText(doc, band.text);
     doc.text(band.letter, px + 1.1, py + 3);
   }
 
-  const pad = 0.9;
-  const contentW = pw - 2 * pad;
+  const pad = 0.85;
+  const contentW = Math.max(2, pw - 2 * pad);
   setText(doc, band.text);
 
   // Fardos **transversais** (altos e estreitos: largura < altura e
@@ -400,19 +401,16 @@ function drawBale(
           : [words[0], words[1], words.slice(2).join(" ")];
 
     const infoLines: { text: string; bold: boolean; scale: number }[] = [
-      ...prodLines.map((w) => ({ text: w, bold: true, scale: 1 })),
-      { text: lote, bold: true, scale: 0.9 },
-      { text: `${tamanho} · IQ ${Math.round(iq)}`, bold: false, scale: 0.78 },
+      ...prodLines.map((w) => ({ text: w, bold: true, scale: 0.92 })),
+      { text: lote, bold: true, scale: 1.08 },
+      { text: `${tamanho} · IQ ${Math.round(iq)}`, bold: false, scale: 0.82 },
     ];
 
     const topOffset = 4.2; // reserva p/ a letra-classe no canto
-    const botOffset = 1.2;
+    const botOffset = 1.1;
     const availH = ph - topOffset - botOffset;
     const lineH = availH / infoLines.length;
-    // Fonte base que caiba na linha com leading ~1,25. Cap em 8,5 pt
-    // porque, a 15 mm de largura útil, "SILVANA"/"VARNIER" (7 chars) já
-    // ocupam ~12,6 mm — qualquer valor acima trunca.
-    const basePt = Math.max(5.5, Math.min(8.5, lineH / 0.44));
+    const basePt = Math.max(6.2, Math.min(10.2, lineH / 0.4));
 
     for (let i = 0; i < infoLines.length; i++) {
       const l = infoLines[i];
@@ -435,44 +433,43 @@ function drawBale(
 
   if (canFitThree) {
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(Math.min(13, ph * 0.45));
+    doc.setFontSize(Math.max(7.5, Math.min(14, ph * 0.38)));
     doc.text(
       shrinkToWidth(doc, produtor, contentW),
       px + pw / 2,
-      py + ph * 0.33,
+      py + ph * 0.3,
       { align: "center" },
     );
 
-    doc.setFontSize(Math.min(10.5, ph * 0.35));
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(Math.max(9, Math.min(17, ph * 0.44)));
     doc.text(
       shrinkToWidth(doc, lote, contentW),
       px + pw / 2,
-      py + ph * 0.6,
+      py + ph * 0.56,
       { align: "center" },
     );
 
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(Math.min(8, ph * 0.26));
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(Math.max(6.8, Math.min(11, ph * 0.24)));
     doc.text(
       shrinkToWidth(doc, `${tamanho} · IQ ${Math.round(iq)}`, contentW),
       px + pw / 2,
-      py + ph * 0.85,
+      py + ph * 0.82,
       { align: "center" },
     );
   } else if (canFitTwo) {
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(Math.min(12, ph * 0.6));
+    doc.setFontSize(Math.max(7.5, Math.min(13, ph * 0.52)));
     doc.text(
       shrinkToWidth(doc, produtor, contentW),
       px + pw / 2,
-      py + ph * 0.42,
+      py + ph * 0.38,
       { align: "center" },
     );
 
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(Math.min(9.5, ph * 0.45));
-    // Fardos longitudinais costumam ter largura útil >30 mm; colocar IQ na
-    // segunda linha evita sacrificar a informação só porque sobra espaço.
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(Math.max(8.5, Math.min(14, ph * 0.48)));
     doc.text(
       shrinkToWidth(
         doc,
@@ -480,13 +477,29 @@ function drawBale(
         contentW,
       ),
       px + pw / 2,
-      py + ph * 0.78,
+      py + ph * 0.72,
+      { align: "center" },
+    );
+  } else if (pw >= 5 && ph >= 4) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(Math.max(7, Math.min(11, ph * 0.5)));
+    doc.text(
+      shrinkToWidth(doc, lote, contentW),
+      px + pw / 2,
+      py + ph * 0.42,
+      { align: "center" },
+    );
+    doc.setFontSize(Math.max(6, Math.min(9, ph * 0.32)));
+    doc.text(
+      shrinkToWidth(doc, `${produtor} · ${tamanho}`, contentW),
+      px + pw / 2,
+      py + ph * 0.72,
       { align: "center" },
     );
   } else if (pw >= 4 && ph >= 3.5) {
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(Math.min(8, ph * 0.9));
-    doc.text(tamanho, px + pw / 2, py + ph / 2 + 1, { align: "center" });
+    doc.setFontSize(Math.max(7, Math.min(9, ph * 0.85)));
+    doc.text(shrinkToWidth(doc, lote, contentW), px + pw / 2, py + ph / 2 + 0.8, { align: "center" });
   }
 }
 
@@ -550,7 +563,7 @@ function drawLayoutStripWrapped(
 
     // Ticks do eixo X a cada 5 m, ancorados no grid absoluto da pista.
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(7);
+    doc.setFontSize(7.5);
     setText(doc, INK_SOFT);
     const firstTick = Math.ceil(xStart / 5) * 5;
     for (let t = firstTick; t <= xEnd + 1e-6; t += 5) {
@@ -793,7 +806,7 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     y += 7;
   }
 
-  // --- Legenda de IQ em escala de cinza ---
+  // --- Legenda de IQ em escala de cinza (impressão P&B) ---
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
   setText(doc, INK);
@@ -856,7 +869,6 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     pageW = doc.internal.pageSize.getWidth();
     pageH = doc.internal.pageSize.getHeight();
 
-    // Cabeçalho leve
     setText(doc, INK_SOFT);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
@@ -945,11 +957,12 @@ export function buildSeqPDF(input: BuildSeqPdfInput): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     setText(doc, INK_SOFT);
-    doc.text(
-      "  ·  Área útil 45,35 × 2,20 m  ·  Fardo P 1,10 × 0,58 m  ·  Fardo G 1,40 × 0,58 m  ·  movimento do Blendomat →",
-      ix + labelW,
-      cy + 4,
-    );
+    const dimLine =
+      `  ·  Área útil ${fmt1(OPENING_AREA_LENGTH_M)} × ${fmt1(OPENING_AREA_WIDTH_M)} m` +
+      `  ·  Fardo P ${fmt1(BALE_P_LENGTH_M)} × ${fmt1(BALE_WIDTH_M)} m` +
+      `  ·  Fardo G ${fmt1(BALE_G_LENGTH_M)} × ${fmt1(BALE_WIDTH_M)} m` +
+      `  ·  movimento do Blendomat →`;
+    doc.text(dimLine, ix + labelW, cy + 4);
     cy += 8;
 
     const usageRows = summarizeSequenceUsage(seq).length;
