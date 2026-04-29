@@ -25,6 +25,11 @@ import {
   filterUsableLots,
   isLotUsableForOptimization,
 } from "@/engine/baseline";
+import {
+  computeBaleAvailability,
+  estimateMaxMixWeightKg,
+  type BaleAvailability,
+} from "@/domain/baleCaps";
 
 const OPTIMIZER_VERSION = "2.0.0";
 
@@ -193,6 +198,10 @@ interface AppState {
   isGenerating: boolean;
   generationStatus: string;
   generationProgress: number;
+  /** Máximo de fardos P da seleção atual disponibilizado ao gerador de mistura. */
+  mixCapBalesP: number;
+  /** Máximo de fardos G da seleção atual disponibilizado ao gerador de mistura. */
+  mixCapBalesG: number;
 }
 
 const initialState: AppState = {
@@ -226,6 +235,8 @@ const initialState: AppState = {
   isGenerating: false,
   generationStatus: "",
   generationProgress: 0,
+  mixCapBalesP: 0,
+  mixCapBalesG: 0,
 };
 
 interface AppContextValue extends AppState {
@@ -273,6 +284,11 @@ interface AppContextValue extends AppState {
   getExplainRelaxation: () => string | null;
   hasCostData: () => boolean;
   applyQualityBaseline: () => void;
+  mixtureBaleAvailability: BaleAvailability;
+  /** Estimativa (kg) do peso máximo de mistura coerente com os tetos de fardos P/G atuais. */
+  estimatedMaxMixWeightKg: number;
+  setMixCapBalesP: (n: number) => void;
+  setMixCapBalesG: (n: number) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -280,6 +296,8 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>(initialState);
   const stateRef = useRef(state);
+  /** Totals P/G da última sincronização dos tetos (para detectar inclusão de produtores e subir o máximo). */
+  const mixAvailTotalsPrevRef = useRef({ p: -1, g: -1 });
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -392,14 +410,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           alert("Erros no CSV:\n- " + errors.join("\n- "));
           return;
         }
-        setState((s) => ({
-          ...s,
-          stock: lots,
-          excludedFromMixIds: [],
-          qualityBinBreakpoints: {},
-          lastCsvWarnings: warnings,
-          suggestions: [],
-        }));
+        setState((s) => {
+          const usableLots = lots.filter(isLotUsableForOptimization);
+          const avail = computeBaleAvailability(usableLots);
+          return {
+            ...s,
+            stock: lots,
+            excludedFromMixIds: [],
+            qualityBinBreakpoints: {},
+            lastCsvWarnings: warnings,
+            suggestions: [],
+            mixCapBalesP: avail.totalP,
+            mixCapBalesG: avail.totalG,
+          };
+        });
       } catch (err) {
         alert("Falha ao processar CSV: " + (err instanceof Error ? err.message : String(err)));
       }
@@ -419,6 +443,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       suggestions: [],
       curStep: 1,
       curPage: "step1",
+      mixCapBalesP: 0,
+      mixCapBalesG: 0,
     }));
   }, []);
 
@@ -497,7 +523,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [state.stock, state.excludedFromMixIds]
   );
 
+  const mixtureBaleAvailability = useMemo(
+    () => computeBaleAvailability(stockForMixture),
+    [stockForMixture],
+  );
+
+  const estimatedMaxMixWeightKg = useMemo(
+    () =>
+      estimateMaxMixWeightKg(state.mixCapBalesP, state.mixCapBalesG, mixtureBaleAvailability),
+    [state.mixCapBalesP, state.mixCapBalesG, mixtureBaleAvailability],
+  );
+
+  useEffect(() => {
+    const mix = stockForMix(state.stock, state.excludedFromMixIds);
+    const avail = computeBaleAvailability(mix);
+    const prev = mixAvailTotalsPrevRef.current;
+
+    setState((s) => {
+      let np = s.mixCapBalesP;
+      let ng = s.mixCapBalesG;
+
+      if (avail.totalP > prev.p) np = avail.totalP;
+      else np = Math.min(np, avail.totalP);
+
+      if (avail.totalG > prev.g) ng = avail.totalG;
+      else ng = Math.min(ng, avail.totalG);
+
+      if (np === s.mixCapBalesP && ng === s.mixCapBalesG) return s;
+      return { ...s, mixCapBalesP: np, mixCapBalesG: ng };
+    });
+
+    mixAvailTotalsPrevRef.current = { p: avail.totalP, g: avail.totalG };
+  }, [state.stock, state.excludedFromMixIds]);
+
+  const setMixCapBalesP = useCallback((v: number) => {
+    setState((s) => {
+      const mix = stockForMix(s.stock, s.excludedFromMixIds);
+      const avail = computeBaleAvailability(mix);
+      const n = Number.isFinite(v) ? Math.floor(v) : 0;
+      return { ...s, mixCapBalesP: Math.max(0, Math.min(n, avail.totalP)) };
+    });
+  }, []);
+
+  const setMixCapBalesG = useCallback((v: number) => {
+    setState((s) => {
+      const mix = stockForMix(s.stock, s.excludedFromMixIds);
+      const avail = computeBaleAvailability(mix);
+      const n = Number.isFinite(v) ? Math.floor(v) : 0;
+      return { ...s, mixCapBalesG: Math.max(0, Math.min(n, avail.totalG)) };
+    });
+  }, []);
+
   const setTargetWeight = useCallback((w: number) => setState((s) => ({ ...s, targetWeight: w })), []);
+
   const setMixName = useCallback((n: string) => setState((s) => ({ ...s, mixName: n })), []);
 
   const runStrategies = useCallback(async (targetWeight: number, options: RunStrategyOptions = {}) => {
@@ -529,6 +607,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         rules: effectiveRules,
         priority: snap.optimizationPriority,
         seed: Date.now(),
+        baleSizeCaps: {
+          maxP: snap.mixCapBalesP,
+          maxG: snap.mixCapBalesG,
+        },
       };
 
       // 1) Engine Otimizada (clássica)
@@ -807,6 +889,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         rules: s.rules,
         priority: s.optimizationPriority,
         seed: Date.now(),
+        baleSizeCaps: {
+          maxP: s.mixCapBalesP,
+          maxG: s.mixCapBalesG,
+        },
       });
       const best = result.best;
       if (!best || !best.mix.length) {
@@ -855,6 +941,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         priority: s.optimizationPriority,
         seed: Date.now(),
         targetValues: activeTargets,
+        baleSizeCaps: {
+          maxP: s.mixCapBalesP,
+          maxG: s.mixCapBalesG,
+        },
       });
       const best = result.best;
       if (!best || !best.mix.length) {
@@ -1105,10 +1195,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       getExplainRelaxation,
       hasCostData: hasCostDataFn,
       applyQualityBaseline,
+      mixtureBaleAvailability,
+      estimatedMaxMixWeightKg,
+      setMixCapBalesP,
+      setMixCapBalesG,
     }),
     [
       state,
       stockForMixture,
+      mixtureBaleAvailability,
+      estimatedMaxMixWeightKg,
       setStock,
       setCurrentMix,
       setCurStep,
@@ -1151,6 +1247,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       getExplainRelaxation,
       hasCostDataFn,
       applyQualityBaseline,
+      mixtureBaleAvailability,
+      estimatedMaxMixWeightKg,
+      setMixCapBalesP,
+      setMixCapBalesG,
     ]
   );
 

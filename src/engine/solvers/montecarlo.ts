@@ -30,6 +30,7 @@ export async function monteCarloOptimize(
       priority: input.priority,
       seed,
       targetValues: input.targetValues,
+      baleSizeCaps: input.baleSizeCaps,
     });
 
     if (result.best) {
@@ -51,5 +52,6 @@ export async function monteCarloOptimize(
     priority: input.priority,
     seed: baseSeed,
     targetValues: input.targetValues,
+    baleSizeCaps: input.baleSizeCaps,
   });
 }

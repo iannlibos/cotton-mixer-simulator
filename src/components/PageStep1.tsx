@@ -33,6 +33,12 @@ export function PageStep1() {
     toggleProducerMixSelection,
     setQualityBinBreakpoints,
     resetQualityBinBreakpoints,
+    mixtureBaleAvailability,
+    estimatedMaxMixWeightKg,
+    mixCapBalesP,
+    mixCapBalesG,
+    setMixCapBalesP,
+    setMixCapBalesG,
   } = useApp();
   const fileRef = useRef<HTMLInputElement>(null);
   const mixHeaderRef = useRef<HTMLInputElement>(null);
@@ -304,6 +310,88 @@ export function PageStep1() {
                   {label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 18 }}>
+            <div className="card-h" style={{ marginBottom: 8 }}>
+              Disponibilização ao gerador — fardos P e G
+            </div>
+            <p style={{ fontSize: 12, color: "var(--tx3)", lineHeight: 1.55, marginBottom: 14 }}>
+              Regra operacional: você define quantos fardos <strong>P</strong> (1,10 m) e <strong>G</strong> (1,40 m),
+              no máximo, poderão ser usados ao montar a mistura na engine.
+            </p>
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <label className="lbl">Máx. fardos P na mistura</label>
+                <input
+                  type="number"
+                  className="inp inp-num"
+                  min={0}
+                  max={mixtureBaleAvailability.totalP}
+                  disabled={mixtureBaleAvailability.totalP === 0}
+                  value={mixCapBalesP}
+                  onChange={(e) => setMixCapBalesP(parseInt(e.target.value, 10) || 0)}
+                  style={{ width: 120 }}
+                  aria-describedby="bale-cap-hint"
+                />
+                <div style={{ fontSize: 11, color: "var(--tx3)", marginTop: 4 }}>
+                  Disponíveis na seleção:{" "}
+                  <strong>{mixtureBaleAvailability.totalP.toLocaleString("pt-BR")}</strong> fardos P
+                  {mixtureBaleAvailability.totalP > 0 && (
+                    <span className="mono" style={{ marginLeft: 6 }}>
+                      (~{(mixtureBaleAvailability.avgKgPerP || 0).toFixed(1)} kg/fardo)
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <label className="lbl">Máx. fardos G na mistura</label>
+                <input
+                  type="number"
+                  className="inp inp-num"
+                  min={0}
+                  max={mixtureBaleAvailability.totalG}
+                  disabled={mixtureBaleAvailability.totalG === 0}
+                  value={mixCapBalesG}
+                  onChange={(e) => setMixCapBalesG(parseInt(e.target.value, 10) || 0)}
+                  style={{ width: 120 }}
+                  aria-describedby="bale-cap-hint"
+                />
+                <div style={{ fontSize: 11, color: "var(--tx3)", marginTop: 4 }}>
+                  Disponíveis na seleção:{" "}
+                  <strong>{mixtureBaleAvailability.totalG.toLocaleString("pt-BR")}</strong> fardos G
+                  {mixtureBaleAvailability.totalG > 0 && (
+                    <span className="mono" style={{ marginLeft: 6 }}>
+                      (~{(mixtureBaleAvailability.avgKgPerG || 0).toFixed(1)} kg/fardo)
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div
+                id="bale-cap-hint"
+                style={{
+                  flex: "1 1 240px",
+                  background: "var(--sf2)",
+                  border: "1px solid var(--bd)",
+                  borderRadius: "var(--r)",
+                  padding: "12px 14px",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: "var(--tx2)",
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3)", marginBottom: 4 }}>
+                  Peso máximo estimado da mistura (só com esses tetos)
+                </div>
+                <div className="mono" style={{ fontSize: 18, fontWeight: 800, color: "var(--cy)" }}>
+                  {estimatedMaxMixWeightKg.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg
+                </div>
+                <div style={{ fontSize: 11, color: "var(--tx3)", marginTop: 6 }}>
+                  Cálculo: tetos × médias de kg/fardo dos lotes <strong>P</strong> e <strong>G</strong> na seleção atual.
+                  O peso alvo na próxima etapa pode ser menor; a engine usa até esses tetos respeitando regras de qualidade.
+                </div>
+              </div>
             </div>
           </div>
 

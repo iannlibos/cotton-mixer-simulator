@@ -1,4 +1,6 @@
 import { PARAMS, TARGET_RANGES } from "../domain/types.js";
+import type { BaleSizeCaps } from "../domain/baleCaps.js";
+import { maxAdditionalBalesForLot } from "../domain/baleCaps.js";
 import type { Lot, MixParams } from "../domain/stock.js";
 import type { Thresholds, EngineRules } from "../domain/types.js";
 import {
@@ -188,7 +190,8 @@ export function localImprove(
   thresholds: Thresholds,
   objectiveWeights: ObjectiveWeights,
   targetValues: Record<string, number> | null = null,
-  maxLoops = 1500
+  maxLoops = 1500,
+  baleSizeCaps: BaleSizeCaps | null = null
 ): void {
   let current = objectiveScore(mix, targetWeight, rules, thresholds, objectiveWeights, targetValues);
   let improved = true;
@@ -207,6 +210,7 @@ export function localImprove(
 
       for (const inLot of [...idle, ...active]) {
         if (inLot.allocBales! >= inLot.fardos) continue;
+        if (maxAdditionalBalesForLot(inLot, mix, baleSizeCaps) < 1) continue;
         inLot.allocBales! += 1;
         inLot.allocWeight = inLot.allocBales! * baleWeight(inLot);
 

@@ -8,6 +8,7 @@ import {
   computeConstraintSummary,
 } from "../constraints.js";
 import { filterUsableLots } from "../baseline.js";
+import { violatesBaleCaps } from "../../domain/baleCaps.js";
 import { optimizeMix, type OptimizerResult, type OptimizerAlternative } from "../optimizer.js";
 import type { SolverInput, SolverOptions } from "./types.js";
 
@@ -158,6 +159,7 @@ export function saOptimize(
     priority: input.priority,
     seed: input.seed ?? Date.now(),
     targetValues: input.targetValues,
+    baleSizeCaps: input.baleSizeCaps,
   });
 
   if (!classicResult.best || !classicResult.best.mix.length) {
@@ -193,6 +195,13 @@ export function saOptimize(
   for (let i = 0; i < iterations; i++) {
     const snapshot = cloneMixState(fullMix);
     perturbSolution(fullMix, rng, input.rules, input.targetWeight);
+    if (violatesBaleCaps(fullMix, input.baleSizeCaps ?? null)) {
+      for (let j = 0; j < fullMix.length; j++) {
+        fullMix[j].allocBales = snapshot[j].allocBales ?? 0;
+        fullMix[j].allocWeight = snapshot[j].allocWeight ?? 0;
+      }
+      continue;
+    }
     const newCost = mixObjective(fullMix, input.targetWeight, input.rules, input.thresholds, targetVals);
 
     const delta = newCost - currentCost;

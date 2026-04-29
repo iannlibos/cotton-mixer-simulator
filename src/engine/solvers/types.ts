@@ -1,3 +1,4 @@
+import type { BaleSizeCaps } from "../../domain/baleCaps.js";
 import type { Lot } from "../../domain/stock.js";
 import type { Thresholds, EngineRules } from "../../domain/types.js";
 import type { OptimizerResult } from "../optimizer.js";
@@ -12,6 +13,7 @@ export interface SolverInput {
   priority?: string;
   seed?: number;
   targetValues?: Record<string, number> | null;
+  baleSizeCaps?: BaleSizeCaps | null;
 }
 
 export interface SolverOptions {

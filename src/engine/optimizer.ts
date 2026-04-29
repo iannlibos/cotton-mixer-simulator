@@ -1,3 +1,5 @@
+import type { BaleSizeCaps } from "../domain/baleCaps.js";
+import { maxAdditionalBalesForLot } from "../domain/baleCaps.js";
 import type { Lot, MixParams } from "../domain/stock.js";
 import type { Thresholds } from "../domain/types.js";
 import type { EngineRules } from "../domain/types.js";
@@ -46,9 +48,12 @@ function canAdd(
   mix: Lot[],
   rules: EngineRules,
   targetWeight: number,
-  incBales: number
+  incBales: number,
+  baleSizeCaps: BaleSizeCaps | null
 ): boolean {
   if (incBales < 1) return false;
+  const room = maxAdditionalBalesForLot(lot, mix, baleSizeCaps);
+  if (incBales > room) return false;
   const tw = totalWeight(mix);
   const bw = baleWeight(lot);
   const activeBefore = mix.filter((m) => m.allocBales! > 0).length;
@@ -95,7 +100,8 @@ function greedyFillRemaining(
   thresholds: Thresholds,
   seedState: { value: number },
   objectiveWeights: ObjectiveWeights,
-  targetValues: Record<string, number> | null
+  targetValues: Record<string, number> | null,
+  baleSizeCaps: BaleSizeCaps | null
 ): void {
   const maxOver = targetWeight * (rules.weightTol / 100) + 0.3;
   let guard = 0;
@@ -141,9 +147,10 @@ function greedyFillRemaining(
         }
       }
       inc = Math.min(inc, lot.fardos - ab, roomBales);
+      inc = Math.min(inc, maxAdditionalBalesForLot(lot, mix, baleSizeCaps));
       if (inc < 1) continue;
 
-      if (!canAdd(lot, mix, rules, targetWeight, inc)) continue;
+      if (!canAdd(lot, mix, rules, targetWeight, inc, baleSizeCaps)) continue;
 
       const jitter = seededRandom(seedState) * 0.015;
       lot.allocBales = ab + inc;
@@ -174,7 +181,8 @@ function allocateGreedy(
   mode: "rotation" | "quality" | "balanced",
   seedState: { value: number },
   objectiveWeights: ObjectiveWeights,
-  targetValues: Record<string, number> | null = null
+  targetValues: Record<string, number> | null = null,
+  baleSizeCaps: BaleSizeCaps | null = null
 ): void {
   const sorted = sortMixForMode(mix, mode);
 
@@ -197,13 +205,15 @@ function allocateGreedy(
     const bw = baleWeight(pick);
     const minOpen = minBalesToOpenNewLot(twRun, bw, rules.minLotPct, pick.fardos);
     if (minOpen === Number.POSITIVE_INFINITY) continue;
-    const add = Math.min(Math.max(minBalesPerProducer, minOpen), pick.fardos);
+    const capRoom = maxAdditionalBalesForLot(pick, mix, baleSizeCaps);
+    let add = Math.min(Math.max(minBalesPerProducer, minOpen), pick.fardos, capRoom);
+    if (add < minOpen || add < 1) continue;
     pick.allocBales = add;
     pick.allocWeight = add * bw;
     twRun += pick.allocWeight;
   }
 
-  greedyFillRemaining(mix, sorted, targetWeight, rules, thresholds, seedState, objectiveWeights, targetValues);
+  greedyFillRemaining(mix, sorted, targetWeight, rules, thresholds, seedState, objectiveWeights, targetValues, baleSizeCaps);
 }
 
 function enforceMinLotParticipation(mix: Lot[], rules: EngineRules): void {
@@ -260,6 +270,7 @@ export function optimizeMix({
   priority = "rotation_first",
   seed = Date.now(),
   targetValues = null,
+  baleSizeCaps = null,
 }: {
   stock: Lot[];
   targetWeight: number;
@@ -268,6 +279,8 @@ export function optimizeMix({
   priority?: string;
   seed?: number;
   targetValues?: Record<string, number> | null;
+  /** Tetos globais de fardos P/G disponibilizados para abrir na mistura (null = sem teto extra). */
+  baleSizeCaps?: BaleSizeCaps | null;
 }): OptimizerResult {
   const usableStock = filterUsableLots(stock);
   const diagnostics = infeasibilityDiagnosis(usableStock, targetWeight, rules);
@@ -293,7 +306,7 @@ export function optimizeMix({
 
   modes.forEach((mode, idx) => {
     const mix = cloneStock(usableStock, thresholds);
-    allocateGreedy(mix, targetWeight, rules, thresholds, mode, seedState, weights, targetValues);
+    allocateGreedy(mix, targetWeight, rules, thresholds, mode, seedState, weights, targetValues, baleSizeCaps);
     for (let pass = 0; pass < 8; pass++) {
       enforceMinLotParticipation(mix, rules);
       greedyFillRemaining(
@@ -304,7 +317,8 @@ export function optimizeMix({
         thresholds,
         seedState,
         weights,
-        targetValues
+        targetValues,
+        baleSizeCaps
       );
     }
     trimToTarget(mix, targetWeight);
@@ -318,10 +332,11 @@ export function optimizeMix({
         thresholds,
         seedState,
         weights,
-        targetValues
+        targetValues,
+        baleSizeCaps
       );
     }
-    localImprove(mix, targetWeight, rules, thresholds, weights, targetValues);
+    localImprove(mix, targetWeight, rules, thresholds, weights, targetValues, 1500, baleSizeCaps);
     for (let pass = 0; pass < 6; pass++) {
       enforceMinLotParticipation(mix, rules);
       greedyFillRemaining(
@@ -332,7 +347,8 @@ export function optimizeMix({
         thresholds,
         seedState,
         weights,
-        targetValues
+        targetValues,
+        baleSizeCaps
       );
     }
 

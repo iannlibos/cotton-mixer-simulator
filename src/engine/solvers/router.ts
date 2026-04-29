@@ -22,6 +22,7 @@ export async function solverRouter(
       priority: input.priority,
       seed: input.seed,
       targetValues: input.targetValues,
+      baleSizeCaps: input.baleSizeCaps,
     });
   } else {
     classicResult = optimizeMix({
@@ -32,6 +33,7 @@ export async function solverRouter(
       priority: input.priority,
       seed: input.seed,
       targetValues: input.targetValues,
+      baleSizeCaps: input.baleSizeCaps,
     });
 
     if (mode === "montecarlo") {
